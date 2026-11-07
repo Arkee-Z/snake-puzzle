@@ -1,0 +1,9 @@
+.DS_Store
+build/
+dist/
+*.o
+*.d
+__pycache__/
+*.pyc
+tests/screenshots/
+snake_puzzle_highscore.txt
