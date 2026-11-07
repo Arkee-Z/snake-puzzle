@@ -1,0 +1,16 @@
+# Key Door
+# A locked door cuts the corridor. Fetch the key from the upper alcove,
+# then return to the door. The lower passage is deliberately blocked.
+name key_door
+difficulty 1
+weight 4
+layout
+#####
+#.K.#
+E.L.X
+#.#.#
+#####
+end
+solution
+d 1; w 1; d 1; s 1; d 2
+end

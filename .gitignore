@@ -3,7 +3,12 @@ build/
 dist/
 *.o
 *.d
+*.dSYM/
 __pycache__/
 *.pyc
-tests/screenshots/
+.pytest_cache/
+.venv/
+venv/
+.idea/
+.vscode/
 snake_puzzle_highscore.txt
