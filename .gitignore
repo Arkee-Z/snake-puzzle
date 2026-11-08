@@ -1,5 +1,6 @@
 .DS_Store
 build/
+build-*/
 dist/
 *.o
 *.d
@@ -11,4 +12,6 @@ __pycache__/
 venv/
 .idea/
 .vscode/
+CMakeUserPresets.json
+compile_commands.json
 snake_puzzle_highscore.txt

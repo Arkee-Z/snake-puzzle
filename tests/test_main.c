@@ -12,6 +12,7 @@ int main(void)
     test_generator_run();
     test_solver_run();
     test_app_run();
+    test_platform_run();
 
     printf("%d checks, %d failures\n", sp_test_checks, sp_test_failures);
     return sp_test_failures == 0 ? 0 : 1;

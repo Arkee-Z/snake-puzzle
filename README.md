@@ -9,6 +9,8 @@
 
 GitHub: <https://github.com/Arkee-Z/snake-puzzle>
 
+下载预编译版本：<https://github.com/Arkee-Z/snake-puzzle/releases/latest>
+
 ![主界面](docs/screenshots/main.png)
 
 | 特殊小关卡 | 局末结算 |
@@ -19,32 +21,66 @@ GitHub: <https://github.com/Arkee-Z/snake-puzzle>
 
 ---
 
-## 快速开始
+## 下载预编译版本
+
+Release 页面提供四个免安装压缩包：
+
+| 平台 | 架构 | 文件 |
+| --- | --- | --- |
+| macOS | Apple Silicon | `snake-puzzle-<version>-macos-arm64.tar.gz` |
+| macOS | Intel | `snake-puzzle-<version>-macos-x86_64.tar.gz` |
+| Linux | x86_64 | `snake-puzzle-<version>-linux-x86_64.tar.gz` |
+| Windows | x86_64 | `snake-puzzle-<version>-windows-x86_64.zip` |
+
+每个包包含可执行文件、`assets/atoms`、`README.md`、`LICENSE`、文档和启动脚本。
+解压后运行 `snake_puzzle`（Windows 为 `snake_puzzle.exe`），无需安装 raylib。
+
+- macOS 构建是未签名版本，首次启动可能需要在 Finder 中右键 → 打开。
+- Linux 构建在 Ubuntu 22.04 上验证，需要常见的 X11/OpenGL/ALSA 桌面库。
+- Windows 构建使用 MinGW-w64 UCRT64 并静态链接 GCC 运行库。
+- 每个 Release 附带 `SHA256SUMS`。
+
+发布流程说明见 [`docs/RELEASE.md`](docs/RELEASE.md)。
+
+## 快速开始（源码构建）
 
 ### 依赖
 
 - C11 编译器（macOS 上使用 Clang 测试）
-- [raylib](https://www.raylib.com/) 6.0（macOS 上以 raylib 6.0 测试）
-- `pkg-config`
-- Python 3.10+（仅离线工具）
-
-macOS：
-
-```bash
-brew install raylib pkg-config
-```
-
-Debian/Ubuntu 可尝试：
-
-```bash
-sudo apt install build-essential pkg-config libraylib-dev
-```
+- [raylib](https://www.raylib.com/) 6.0（CMake 会自动下载 raylib 6.0）
+- CMake 3.20+，或使用 Makefile + 已安装的 raylib
+- `pkg-config`（仅 Makefile 方式需要）
+- Python 3.10+（仅离线工具与打包）
 
 ### 构建与运行
+
+推荐使用 CMake；它会自动拉取并静态编译 raylib 6.0：
+
+```bash
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cmake --parallel
+./build-cmake/snake_puzzle --seed 1234
+```
+
+Linux 构建 raylib 前需要桌面开发库：
+
+```bash
+sudo apt install libasound2-dev libx11-dev libxrandr-dev libxi-dev \
+  libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev libxinerama-dev \
+  libwayland-dev libxkbcommon-dev
+```
+
+如果本机已经安装 raylib 6.0，也可以使用 Makefile：
 
 ```bash
 make
 ./build/snake_puzzle --seed 1234
+```
+
+macOS 安装系统 raylib：
+
+```bash
+brew install raylib pkg-config
 ```
 
 不指定 `--seed` 时使用时间种子。种子会显示在右上角，便于复现同一张地图。
@@ -59,6 +95,13 @@ python3 tools/visualize_map.py build/map.txt
 
 # 批处理统计
 python3 tools/batch_sim.py --count 200 --seed 1000
+
+# 打单个平台发布包
+python3 tools/package_release.py \
+  --binary build-cmake/snake_puzzle \
+  --platform linux-x86_64 \
+  --version 1.1.0 \
+  --output-dir dist
 ```
 
 ---
@@ -210,9 +253,17 @@ python3 tools/batch_sim.py --count 500 --seed 1000 --json
 
 # 4. 导出紧凑 SPA1 原子库
 python3 tools/export_atoms.py --output build/atoms.spa
+
+# 5. 生成平台发布包
+python3 tools/package_release.py \
+  --binary build/snake_puzzle \
+  --platform macos-arm64 \
+  --version 1.1.0 \
+  --output-dir dist
 ```
 
 `make tools-test` 会串联原子校验、SPA 导出和 C 端加载批处理。
+发布流程见 [`docs/RELEASE.md`](docs/RELEASE.md)。
 
 ### 无窗口命令
 
@@ -231,9 +282,11 @@ python3 tools/export_atoms.py --output build/atoms.spa
 
 ```text
 snake_puzzle/
-├── Makefile
+├── CMakeLists.txt     # 跨平台发布构建（自动拉取 raylib 6.0）
+├── Makefile           # 本地开发构建（系统 raylib）
 ├── include/snake_puzzle/
 │   ├── app.h
+│   ├── platform.h     # 可执行文件/资源路径解析
 │   ├── core/          # board, snake, command, event, game, rng, score
 │   ├── entity/        # terrain, item, food, door
 │   ├── gen/           # atom, dependency, generator, validator, solver
@@ -241,14 +294,16 @@ snake_puzzle/
 ├── src/
 │   ├── main.c
 │   ├── app.c
+│   ├── platform.c
 │   ├── core/
 │   ├── gen/
 │   ├── entity/
 │   └── ui/
 ├── assets/atoms/      # 外部谜题原子
-├── tools/             # Python 离线工具
+├── tools/             # Python 离线工具 + 发布打包
 ├── tests/             # C 单元与集成测试
-└── docs/              # 架构文档、截图
+├── .github/workflows/ # CI + 多平台 Release
+└── docs/              # 架构、发布流程、截图
 ```
 
 - `core/` 不包含任何 raylib 头文件；CLI/dump/测试与图形 UI 共享同一套规则。
@@ -275,9 +330,10 @@ make check      # 测试 + Python 工具链 + SPA 导出 + C 加载
 - 求解/验证：参考解逐步模拟、故意失败参考解、可达性 BFS。
 - 应用层：命令提交、真实参考解跑通、特殊关卡暂停/结算、死亡后新局。
 
-当前为 **639 checks, 0 failures**。
+当前为 **643 checks, 0 failures**。
 
-GitHub Actions 会运行核心测试、原子校验和 SPA 导出。
+GitHub Actions 会运行核心测试、原子校验和 SPA 导出；打 `v*` 标签时会触发
+Linux / macOS (arm64 + x86_64) / Windows 多平台二进制构建并发布 Release。
 
 ---
 

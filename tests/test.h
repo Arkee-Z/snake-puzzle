@@ -34,5 +34,6 @@ int test_game_run(void);
 int test_generator_run(void);
 int test_solver_run(void);
 int test_app_run(void);
+int test_platform_run(void);
 
 #endif

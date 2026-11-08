@@ -1,12 +1,27 @@
 #include "snake_puzzle/gen/atom.h"
 
 #include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#define sp_stat _stat
+typedef struct _stat sp_stat_t;
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & _S_IFMT) == _S_IFDIR)
+#endif
+#ifndef S_ISREG
+#define S_ISREG(mode) (((mode) & _S_IFMT) == _S_IFREG)
+#endif
+#else
+#include <dirent.h>
+#define sp_stat stat
+typedef struct stat sp_stat_t;
+#endif
 
 #include "snake_puzzle/core/score.h"
 
@@ -247,8 +262,7 @@ static bool atom_parse_spa(const char *path, const char *content, AtomLibrary *l
                            char *error, size_t error_size)
 {
     char *copy = malloc(strlen(content) + 1);
-    char *line;
-    char *save = NULL;
+    char *cursor;
     int line_no = 0;
     Atom *atom = NULL;
 
@@ -257,13 +271,21 @@ static bool atom_parse_spa(const char *path, const char *content, AtomLibrary *l
         return false;
     }
     memcpy(copy, content, strlen(content) + 1);
-    for (line = strtok_r(copy, "\n", &save); line != NULL;
-         line = strtok_r(NULL, "\n", &save)) {
+    cursor = copy;
+    while (cursor != NULL) {
+        char *line = cursor;
+        char *next_line = strchr(cursor, '\n');
         char *text;
         char *bar1;
         char *bar2;
         char *bar3;
 
+        if (next_line != NULL) {
+            *next_line = '\0';
+            cursor = next_line + 1;
+        } else {
+            cursor = NULL;
+        }
         ++line_no;
         text = trim_line(line);
         if (line_no == 1) {
@@ -428,21 +450,90 @@ bool atom_load_file(AtomLibrary *library, const char *path, char *error, size_t 
 
 static int compare_strings(const void *a, const void *b)
 {
-    const char *const *sa = a;
-    const char *const *sb = b;
+    return strcmp((const char *)a, (const char *)b);
+}
 
-    return strcmp(*sa, *sb);
+static int collect_atom_files(const char *path, char paths[][SP_ATOM_PATH], int max_paths)
+{
+    int count = 0;
+
+#ifdef _WIN32
+    {
+        char pattern[SP_ATOM_PATH];
+        WIN32_FIND_DATAA data;
+        HANDLE handle;
+
+        if (snprintf(pattern, sizeof(pattern), "%s/*", path) >= (int)sizeof(pattern)) {
+            return -1;
+        }
+        handle = FindFirstFileA(pattern, &data);
+        if (handle == INVALID_HANDLE_VALUE) {
+            return -1;
+        }
+        do {
+            char full[SP_ATOM_PATH];
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+                continue;
+            }
+            if (!has_suffix(data.cFileName, ".txt") && !has_suffix(data.cFileName, ".atom")) {
+                continue;
+            }
+            if (snprintf(full, sizeof(full), "%s/%s", path, data.cFileName) >=
+                (int)sizeof(full)) {
+                continue;
+            }
+            if (count < max_paths) {
+                snprintf(paths[count], SP_ATOM_PATH, "%s", full);
+                count += 1;
+            }
+        } while (FindNextFileA(handle, &data));
+        FindClose(handle);
+    }
+#else
+    {
+        DIR *dir = opendir(path);
+        struct dirent *entry;
+
+        if (dir == NULL) {
+            return -1;
+        }
+        while ((entry = readdir(dir)) != NULL) {
+            char full[SP_ATOM_PATH];
+            sp_stat_t entry_info;
+
+            if (entry->d_name[0] == '.') {
+                continue;
+            }
+            if (!has_suffix(entry->d_name, ".txt") && !has_suffix(entry->d_name, ".atom")) {
+                continue;
+            }
+            if (snprintf(full, sizeof(full), "%s/%s", path, entry->d_name) >=
+                (int)sizeof(full)) {
+                continue;
+            }
+            if (sp_stat(full, &entry_info) != 0 || !S_ISREG(entry_info.st_mode)) {
+                continue;
+            }
+            if (count < max_paths) {
+                snprintf(paths[count], SP_ATOM_PATH, "%s", full);
+                count += 1;
+            }
+        }
+        closedir(dir);
+    }
+#endif
+    return count;
 }
 
 bool atom_load_path(AtomLibrary *library, const char *path, char *error, size_t error_size)
 {
-    struct stat info;
+    sp_stat_t info;
 
     memset(library, 0, sizeof(*library));
     if (path == NULL || *path == '\0') {
         path = "assets/atoms";
     }
-    if (stat(path, &info) != 0) {
+    if (sp_stat(path, &info) != 0) {
         snprintf(error, error_size, "atom path not found: %s", path);
         return false;
     }
@@ -455,58 +546,23 @@ bool atom_load_path(AtomLibrary *library, const char *path, char *error, size_t 
     }
 
     {
-        DIR *dir = opendir(path);
-        char *paths[SP_ATOM_MAX * 2];
-        int path_count = 0;
-        struct dirent *entry;
+        char paths[SP_ATOM_MAX * 2][SP_ATOM_PATH];
+        int path_count = collect_atom_files(path, paths, SP_ATOM_MAX * 2);
         int i;
 
-        if (dir == NULL) {
+        if (path_count < 0) {
             snprintf(error, error_size, "cannot open atom directory %s", path);
             return false;
         }
-        while ((entry = readdir(dir)) != NULL) {
-            char full[SP_ATOM_PATH];
-            struct stat entry_info;
-
-            if (entry->d_name[0] == '.') {
-                continue;
-            }
-            if (!has_suffix(entry->d_name, ".txt") && !has_suffix(entry->d_name, ".atom")) {
-                continue;
-            }
-            if (snprintf(full, sizeof(full), "%s/%s", path, entry->d_name) >=
-                (int)sizeof(full)) {
-                continue;
-            }
-            if (stat(full, &entry_info) != 0 || !S_ISREG(entry_info.st_mode)) {
-                continue;
-            }
-            if (path_count < (int)(sizeof(paths) / sizeof(paths[0]))) {
-                paths[path_count] = malloc(strlen(full) + 1);
-                if (paths[path_count] != NULL) {
-                    strcpy(paths[path_count], full);
-                    path_count += 1;
-                }
-            }
+        if (path_count == 0) {
+            snprintf(error, error_size, "no atom files found in %s", path);
+            return false;
         }
-        closedir(dir);
         qsort(paths, (size_t)path_count, sizeof(paths[0]), compare_strings);
         for (i = 0; i < path_count; ++i) {
             if (!atom_load_file(library, paths[i], error, error_size)) {
-                int j;
-                for (j = 0; j < path_count; ++j) {
-                    free(paths[j]);
-                }
                 return false;
             }
-        }
-        for (i = 0; i < path_count; ++i) {
-            free(paths[i]);
-        }
-        if (library->count == 0) {
-            snprintf(error, error_size, "no atom files found in %s", path);
-            return false;
         }
         snprintf(library->source, sizeof(library->source), "%s", path);
     }

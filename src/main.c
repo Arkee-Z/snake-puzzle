@@ -3,11 +3,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#ifdef _WIN32
+#include <process.h>
+#define SP_GETPID _getpid
+#else
 #include <unistd.h>
+#define SP_GETPID getpid
+#endif
 
 #include "snake_puzzle/app.h"
 #include "snake_puzzle/gen/generator.h"
 #include "snake_puzzle/gen/validator.h"
+#include "snake_puzzle/platform.h"
 #include "snake_puzzle/ui/render_cli.h"
 #include "snake_puzzle/ui/render_raylib.h"
 
@@ -15,9 +23,14 @@
 #define SP_DEFAULT_ATOMS_DIR "assets/atoms"
 #endif
 
+#ifndef SP_VERSION
+#define SP_VERSION "1.1.0"
+#endif
+
 typedef struct CliOptions {
     uint64_t seed;
-    const char *atoms_path;
+    char atoms_path[SP_ATOM_PATH];
+    bool atoms_explicit;
     int batch_count;
     int validate;
     int dump;
@@ -30,6 +43,7 @@ typedef struct CliOptions {
     int show_help;
     int demo_special;
     int demo_death;
+    int list_atoms;
 } CliOptions;
 
 static void print_usage(FILE *out)
@@ -124,14 +138,11 @@ static bool parse_args(int argc, char **argv, CliOptions *options)
     int i;
 
     memset(options, 0, sizeof(*options));
-    options->atoms_path = getenv("SNAKE_PUZZLE_ATOMS");
-    if (options->atoms_path == NULL || options->atoms_path[0] == '\0') {
-        options->atoms_path = SP_DEFAULT_ATOMS_DIR;
-    }
+    snprintf(options->atoms_path, sizeof(options->atoms_path), "%s", SP_DEFAULT_ATOMS_DIR);
     options->width = SP_DEFAULT_WIDTH;
     options->height = SP_DEFAULT_HEIGHT;
     options->step_ms = 105;
-    options->seed = (uint64_t)time(NULL) ^ ((uint64_t)getpid() << 32);
+    options->seed = (uint64_t)time(NULL) ^ ((uint64_t)SP_GETPID() << 32);
 
     for (i = 1; i < argc; ++i) {
         const char *arg = argv[i];
@@ -140,7 +151,7 @@ static bool parse_args(int argc, char **argv, CliOptions *options)
             print_usage(stdout);
             exit(0);
         } else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--version") == 0) {
-            printf("snake_puzzle 1.0.0\n");
+            printf("snake_puzzle %s\n", SP_VERSION);
             exit(0);
         } else if (strcmp(arg, "--seed") == 0) {
             const char *value = find_option_value(argc, argv, &i);
@@ -154,7 +165,8 @@ static bool parse_args(int argc, char **argv, CliOptions *options)
                 fprintf(stderr, "error: --atoms expects a path\n");
                 return false;
             }
-            options->atoms_path = value;
+            snprintf(options->atoms_path, sizeof(options->atoms_path), "%s", value);
+            options->atoms_explicit = true;
         } else if (strcmp(arg, "--width") == 0) {
             const char *value = find_option_value(argc, argv, &i);
             if (value == NULL || !parse_int(value, &options->width)) {
@@ -218,20 +230,7 @@ static bool parse_args(int argc, char **argv, CliOptions *options)
         } else if (strcmp(arg, "--demo-death") == 0) {
             options->demo_death = 1;
         } else if (strcmp(arg, "--list-atoms") == 0) {
-            Generator generator;
-            char error[SP_MESSAGE_MAX];
-            int a;
-            if (!generator_init(&generator, options->atoms_path, error, sizeof(error))) {
-                fprintf(stderr, "error: %s\n", error);
-                return false;
-            }
-            for (a = 0; a < generator.library.count; ++a) {
-                const Atom *atom = &generator.library.atoms[a];
-                printf("%-20s %dx%d difficulty=%d weight=%d solution=%d steps\n",
-                       atom->name, atom->width, atom->height, atom->difficulty,
-                       atom->weight, command_sequence_total_steps(&atom->solution));
-            }
-            exit(0);
+            options->list_atoms = 1;
         } else {
             fprintf(stderr, "error: unknown option '%s' (try --help)\n", arg);
             return false;
@@ -248,6 +247,15 @@ static bool parse_args(int argc, char **argv, CliOptions *options)
     }
     if (options->screenshot_path != NULL && options->auto_exit <= 0.0) {
         options->auto_exit = 1.0;
+    }
+    {
+        char resolved[SP_ATOM_PATH];
+        if (!sp_resolve_atoms_path(options->atoms_path, options->atoms_explicit, resolved,
+                                   sizeof(resolved))) {
+            fprintf(stderr, "error: could not resolve atom directory\n");
+            return false;
+        }
+        snprintf(options->atoms_path, sizeof(options->atoms_path), "%s", resolved);
     }
     return true;
 }
@@ -285,6 +293,26 @@ static void json_escape(FILE *out, const char *text)
         ++p;
     }
     fputc('"', out);
+}
+
+static int run_list_atoms(const CliOptions *options)
+{
+    Generator generator;
+    char error[SP_MESSAGE_MAX];
+    int a;
+
+    if (!generator_init(&generator, options->atoms_path, error, sizeof(error))) {
+        fprintf(stderr, "error: %s\n", error);
+        return 1;
+    }
+    printf("atom registry: %s\n", options->atoms_path);
+    for (a = 0; a < generator.library.count; ++a) {
+        const Atom *atom = &generator.library.atoms[a];
+        printf("%-20s %dx%d difficulty=%d weight=%d solution=%d steps\n", atom->name,
+               atom->width, atom->height, atom->difficulty, atom->weight,
+               command_sequence_total_steps(&atom->solution));
+    }
+    return 0;
 }
 
 static int run_batch(const CliOptions *options)
@@ -388,6 +416,9 @@ int main(int argc, char **argv)
 
     if (!parse_args(argc, argv, &options)) {
         return 2;
+    }
+    if (options.list_atoms) {
+        return run_list_atoms(&options);
     }
     if (options.batch_count > 0) {
         return run_batch(&options);

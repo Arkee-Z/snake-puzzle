@@ -18,12 +18,13 @@ GEN_SRC := $(wildcard src/gen/*.c)
 APP_SRC := $(wildcard src/app.c)
 UI_SRC := $(wildcard src/ui/*.c)
 MAIN_SRC := $(wildcard src/main.c)
-ALL_SRC := $(CORE_SRC) $(GEN_SRC) $(APP_SRC) $(UI_SRC) $(MAIN_SRC)
+PLATFORM_SRC := src/platform.c
+ALL_SRC := $(CORE_SRC) $(GEN_SRC) $(APP_SRC) $(UI_SRC) $(MAIN_SRC) $(PLATFORM_SRC)
 OBJ := $(patsubst %.c,$(BUILD)/obj/%.o,$(ALL_SRC))
 DEP := $(OBJ:.o=.d)
 
 TEST_SRC := $(wildcard tests/*.c)
-TEST_CORE_SRC := $(CORE_SRC) $(GEN_SRC) $(APP_SRC)
+TEST_CORE_SRC := $(CORE_SRC) $(GEN_SRC) $(APP_SRC) $(PLATFORM_SRC)
 
 .PHONY: all run test check clean tools-test validate-atoms batch-example
 
