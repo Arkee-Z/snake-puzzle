@@ -102,13 +102,13 @@ def main() -> int:
 
         if is_windows:
             (stage / "run.bat").write_text(
-                '@echo off\r\n"%~dp0sp.exe" %*\r\n', encoding="utf-8"
+                '@echo off\r\ncd /d "%~dp0"\r\nsp.exe %*\r\n', encoding="utf-8"
             )
         else:
             script = stage / "run.sh"
             script.write_text(
                 '#!/bin/sh\nDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
-                'exec "$DIR/sp" "$@"\n',
+                'cd "$DIR" || exit 1\nexec ./sp "$@"\n',
                 encoding="utf-8",
             )
             script.chmod(0o755)
@@ -116,7 +116,7 @@ def main() -> int:
             command = stage / "run.command"
             command.write_text(
                 '#!/bin/sh\nDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
-                'exec "$DIR/sp" "$@"\n',
+                'cd "$DIR" || exit 1\nexec ./sp "$@"\n',
                 encoding="utf-8",
             )
             command.chmod(0o755)
