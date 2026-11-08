@@ -4,6 +4,7 @@
 > 当前 `main` 已按 v0.1–v0.5 落地为纯终端 C 版；早期 raylib 原型只保留在 Git
 > 历史和 v1.1.0 的旧 Release 中。
 > 快速开始见 [「运行」](#运行)，开发决策见 [`devlog.md`](devlog.md)。
+> 最新终端二进制：[Releases latest](https://github.com/Arkee-Z/snake-puzzle/releases/latest)。
 
 ## 1. 项目定位
 
@@ -109,7 +110,8 @@
 ```bash
 make
 ./build/sp                         # 随机地图
-./build/sp maps/tutorial.map       # 固定教程地图
+./build/sp maps/tutorial.map       # 固定教程地图（回合）
+./build/sp maps/realtime.map       # 直接进入实时地图
 ./build/sp --seed 42               # 可复现随机地图
 ./build/sp --no-color --debug      # 无颜色 + 调试 HUD
 make test
@@ -117,7 +119,8 @@ make test
 
 - 纯 C11，无 ncurses、无 raylib、无第三方运行时依赖。
 - macOS/Linux 使用 POSIX 终端；Windows 10/11 需支持 ANSI 的控制台。
-- Windows 构建输出 `build/sp.exe`。
+- Windows 构建在 MSYS2 UCRT64 中执行 `make`，输出 `build/sp.exe`。
+- 预编译包见 [Releases latest](https://github.com/Arkee-Z/snake-puzzle/releases/latest)。
 - 不写存档、不做局外成长、没有 Undo。
 
 ### 操作
@@ -155,7 +158,8 @@ D  door       @  start      E  real-time exit
 - 回合地图需要恰好一个 `D`；食物数量决定门限范围：
   `min = total/2`，`max = total-1`（食物较少时自动收敛）。
 - 超过 `max` 后门永久封印，需要重开。
-- 实时地图可直接包含 `E`；随机模式会生成独立实时 chamber。
+- `maps/realtime.map` 演示了不含 `D`、直接包含 `E` 的实时地图；
+  随机模式会生成独立实时 chamber。
 - 随机地图生成后用内置 BFS 实测一遍完整回合路径与实时出关路径，
   不通就重试，因此默认策略保证能解。
 
@@ -192,7 +196,7 @@ src/game.c         地图解析、随机生成、碰撞、门、BFS、计分、p
 src/term.c         原始输入、计时、光标、ANSI
 src/main.c         ANSI 渲染、回合/实时循环、CLI、结算
 maps/tutorial.map  手工教程地图
-tests/test_main.c  152 checks
+tests/test_main.c  159 checks
 devlog.md          决策记录
 ```
 

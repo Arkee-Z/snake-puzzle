@@ -21,6 +21,7 @@ def write_quickstart(path: Path, version: str, platform: str, executable: str) -
 Run:
   {executable}
   {executable} maps/tutorial.map
+  {executable} maps/realtime.map
   {executable} --seed 1234
   {executable} --help
 

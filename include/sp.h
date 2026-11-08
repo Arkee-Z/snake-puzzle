@@ -11,7 +11,7 @@
 #define SP_MAX_COMMANDS 32
 #define SP_MAX_STEPS 99
 #define SP_MESSAGE_MAX 192
-#define SP_VERSION "0.5.0"
+#define SP_VERSION "0.5.1"
 
 typedef enum {
     SP_DIR_UP = 0,

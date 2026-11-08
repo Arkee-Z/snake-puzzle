@@ -113,6 +113,20 @@ static void test_tutorial_map(void)
     CHECK_INT(game.snake[0].y, 2);
 }
 
+static void test_realtime_map_load(void)
+{
+    SpGame game;
+    char error[128];
+
+    CHECK(game_load_map(&game, "maps/realtime.map", error, sizeof(error)));
+    CHECK_INT(game.mode, SP_MODE_REALTIME);
+    CHECK_INT(game.width, 20);
+    CHECK_INT(game.height, 15);
+    CHECK_INT(game.exit_x, 17);
+    CHECK_INT(game.exit_y, 3);
+    CHECK_INT(game.length, 3);
+}
+
 static void test_movement_and_food(void)
 {
     SpGame game;
@@ -320,6 +334,7 @@ int main(void)
 {
     test_parser();
     test_tutorial_map();
+    test_realtime_map_load();
     test_movement_and_food();
     test_door_quota();
     test_self_collision();
