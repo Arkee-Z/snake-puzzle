@@ -10,6 +10,8 @@
 
 static void copy_text(char *out, size_t out_size, const char *text)
 {
+    size_t length;
+
     if (out_size == 0) {
         return;
     }
@@ -17,7 +19,12 @@ static void copy_text(char *out, size_t out_size, const char *text)
         out[0] = '\0';
         return;
     }
-    snprintf(out, out_size, "%s", text);
+    length = strlen(text);
+    if (length >= out_size) {
+        length = out_size - 1;
+    }
+    memmove(out, text, length);
+    out[length] = '\0';
 }
 
 static void app_advance_execution(App *app)
@@ -178,10 +185,14 @@ bool app_new_run(App *app)
     app->log_head = 0;
     app->notice_type = EVENT_INFO;
     app->input_error[0] = '\0';
-    snprintf(app->notice, sizeof(app->notice),
-             "New map %llu. %s + %s. Collect both seals, then reach the special gate.",
-             (unsigned long long)seed, app->main_stats.atoms[0], app->main_stats.atoms[1]);
-    app_add_log(app, EVENT_INFO, app->notice);
+    {
+        char message[SP_MESSAGE_MAX];
+        snprintf(message, sizeof(message),
+                 "New map %llu. %s + %s. Collect both seals, then reach the special gate.",
+                 (unsigned long long)seed, app->main_stats.atoms[0],
+                 app->main_stats.atoms[1]);
+        app_add_log(app, EVENT_INFO, message);
+    }
     app_input_clear(app);
     return true;
 }
@@ -218,7 +229,7 @@ bool app_submit_command(App *app)
     app->input_error[0] = '\0';
     app_input_clear(app);
     {
-        char formatted[SP_LINE_MAX];
+        char formatted[160];
         command_sequence_format(&parsed, formatted, sizeof(formatted));
         app_add_log(app, EVENT_INFO, formatted);
         snprintf(app->notice, sizeof(app->notice), "Executing %s", formatted);

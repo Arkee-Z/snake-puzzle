@@ -156,14 +156,15 @@ bool sp_resolve_atoms_path(const char *requested, bool requested_explicit, char 
         return true;
     }
     if (sp_executable_dir(exe_dir, sizeof(exe_dir))) {
-        static const char *const RELATIVE[] = {
+        static const char *const CANDIDATE_SUFFIXES[] = {
             "assets/atoms",
             "../Resources/assets/atoms",
             "../share/snake-puzzle/assets/atoms",
             "../assets/atoms",
         };
-        for (i = 0; i < (int)(sizeof(RELATIVE) / sizeof(RELATIVE[0])); ++i) {
-            if (join_path(candidate, sizeof(candidate), exe_dir, RELATIVE[i]) &&
+        for (i = 0; i < (int)(sizeof(CANDIDATE_SUFFIXES) / sizeof(CANDIDATE_SUFFIXES[0]));
+             ++i) {
+            if (join_path(candidate, sizeof(candidate), exe_dir, CANDIDATE_SUFFIXES[i]) &&
                 try_candidate(candidate, out, out_size)) {
                 return true;
             }

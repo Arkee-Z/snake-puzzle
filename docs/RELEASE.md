@@ -31,8 +31,8 @@ No raylib installation is needed on the player's machine.
 
 `.github/workflows/release.yml` runs on:
 
-- `macos-14` cross-compiled for `arm64`
-- `macos-14` cross-compiled for `x86_64`
+- `macos-15` for Apple Silicon (`arm64`)
+- `macos-15-intel` for Intel (`x86_64`)
 - `ubuntu-22.04` for Linux `x86_64`
 - `windows-2022` with MSYS2 MinGW-w64 UCRT64 for Windows `x86_64`
 
