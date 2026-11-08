@@ -1,355 +1,123 @@
-# Snake Puzzle
+# Snake Puzzle (SP) 设计需求
 
-**指令驱动的网格解谜贪吃蛇 × 纯肉鸽。** 观察一张随机生成、可验证的机关地图，预判蛇身占位、推石与单向门，输入一条不可中断的移动指令序列，然后看着它一步步执行。
+> **文档状态：设计草案。**
+> 本文是下一阶段终端版 SP 的目标设计，不代表当前二进制已经实现全部条目。
+> 仓库当前仍保留早期 raylib 原型，差异与迁移状态见文末
+> [「当前仓库状态」](#当前仓库状态)。
+> 开发决策记录见 [`devlog.md`](devlog.md)。
 
-- 无局外成长、无模式菜单、无持久化解锁、无 Undo。
-- 唯一成长是玩家对空间和机关的理解。
-- C11 运行时 + raylib 图形界面；Python 只做离线工具链。
-- 每一张地图都带有一条经过**真实游戏引擎逐步模拟**的参考解。
+## 1. 项目定位
 
-GitHub: <https://github.com/Arkee-Z/snake-puzzle>
+**Snake Puzzle** 是一个基于终端、以 C 语言实现的**回合制贪吃蛇 + 迷宫谜题**游戏。
 
-下载预编译版本：<https://github.com/Arkee-Z/snake-puzzle/releases/latest>
+首要目的不是面向玩家发行，而是**自用、探索、学习**：把系统编程、文件 I/O、输入机制、路径算法、模式切换等学习内容，通过“游戏化产出”串起来。
 
-![主界面](docs/screenshots/main.png)
+核心哲学：**一切交互都可逆向；软件/工具/调试信息都可以成为游戏机制的一部分；抽象是中间产物，不是目标。**
 
-| 特殊小关卡 | 局末结算 |
+## 2. 核心玩法
+
+- 玩家控制一条蛇在二维网格地图中移动。
+- 地图包含：边界、障碍物/碰撞点、食物、门、蛇身。
+- 吃食物使蛇身增长。
+- 需要通过计算路径，在障碍和蛇身限制下收集食物并到达门。
+- 计分机制：**时间 + 蛇身长度双计分**，激励玩家在“更快”和“更长”之间权衡。
+
+## 3. 输入与命令机制
+
+- 基础移动：`w/a/s/d` + 回车提交，构成**回合制移动**。
+- 进阶命令：支持 `w 3`、`a 2` 这类“方向 + 步数”的命令解析，一次移动多格。
+- 多格移动必须逐格检测碰撞，不能穿墙、穿障碍、穿蛇身。
+- 回合制下，玩家可手写路径遍历算法，生成 `w\n1\ns\n1...` 指令序列输入；但由于地图随机，**不能静态批量注入**，需要运行时读取地图、计算路径、实时注入或内部求解。
+
+## 4. 双模式与“门”机制
+
+- **普通模式：回合制**
+  - 输入需回车确认。
+  - 渲染风格为普通关卡。
+- **门机制**
+  - 地图上设置“门”。
+  - 玩家需吃下**特定数量范围内**的食物，才允许进入门。
+  - 进入门后切换到**实时模式**。
+- **实时模式**
+  - `w/a/s/d` 实时控制蛇头方向，不再需要回车确认。
+  - 渲染效果与普通模式有明显区别，让玩家感知“世界观/物理法则”切换。
+  - 技术上可通过 `stty -icanon -echo` / 恢复 `icanon echo` 等方式突破 `getchar()` 的行缓冲束缚；先追求手感差异跑通，不提前深挖 `termios`/TTY 内核细节。
+
+## 5. 地图与关卡
+
+- 支持从文本文件加载二维字符矩阵关卡，例如 `maps/tutorial.map`。
+- 支持随机生成关卡。
+- 地图元素至少包括：空地、障碍/墙、食物、蛇头/蛇身、门。
+- 关卡应具有谜题性质：障碍物和碰撞点迫使玩家计算路径，而不是无脑移动。
+
+## 6. 扩展玩法
+
+- **自动寻路/“外挂”模式**：游戏内部实现 BFS 等极简寻路，按 `p` 自动走一步或连续寻路，用于验证运行时求解随机地图的可行性。
+- **玩家编写 `move` 函数**：终极形态可通过函数指针或修改源码中的 `player_move` 策略函数，重新编译提交策略。修改源码本身成为游戏机制的一部分。
+- **调试信息游戏化**：坐标、ASCII 码、耗时、读取字节数等调试输出可作为 HUD 或游戏反馈的一部分。
+
+## 7. 技术实现约束
+
+- 语言：C。
+- 平台：终端。
+- 渲染：ANSI 转义清屏/定位，基础字符绘制。
+- 数据结构：优先固定数组，如 `snake[100][2]`、`map[20][20]`、BFS 队列数组；不急于封装复杂结构体。
+- 禁止过早抽象：不造引擎，不写 `GameObjectManager` 之类；`switch-case` 能解决就不抽象。
+- 不提前引入大库：先不用 `ncurses` 等；需要时再按需学习。
+- 项目驱动学习：文件系统、内核、词法解析、shell 管道、缓冲结构等，**碰到再学**；15 分钟卡点未解则绕过并记 `TODO`。
+- 防过度设计红线：修改必须带来肉眼可见/可交互变化；否则撤销。
+
+## 8. 开发日志需求
+
+- 在项目根目录维护 `log.txt` 或 `devlog.md`。
+- 不写流水账、不写周报、不做复杂字段。
+- 每次解决卡点或完成阶段功能后，用**一句话/一段话**记录：
+  - 因为什么原因；
+  - 没选什么方案；
+  - 用了什么方案；
+  - 发现了什么现象；
+  - 下一步做什么。
+- 日志用于给未来的自己保留**决策上下文**，是成熟工程师的必经之路。
+
+实现：[`devlog.md`](devlog.md)。
+
+## 9. 里程碑草案
+
+- **v0.1**：蛇能移动，地图可绘制，食物出现，吃食物增长，基础计分。
+- **v0.2**：支持 `w 3` 命令解析；加入障碍地图和碰撞检测；形成谜题关卡。
+- **v0.3**：加入“门”与食物数量阈值；实现回合制/实时模式切换及明显渲染差异。
+- **v0.4**：加入 BFS 自动寻路/运行时求解；验证随机地图下的“外挂”路径。
+- **v0.5**：支持玩家编写 `move` 策略函数，重新编译提交策略。
+
+---
+
+**一句话总结：**
+
+> Snake Puzzle 是一个用 C 和终端实现的、以回合制贪吃蛇为外壳、以迷宫路径规划和双模式切换为核心机制、以自用探索和游戏化学习为目的的可扩展谜题游戏。
+
+## 当前仓库状态
+
+当前 `main` 上仍保留早期 **raylib 原型**，它与本文的终端目标存在明确差异：
+
+| 目标条目 | 当前原型 |
 | --- | --- |
-| ![特殊小关卡](docs/screenshots/special.png) | ![局末结算](docs/screenshots/gameover.png) |
-
-![字段手册](docs/screenshots/manual.png)
-
----
-
-## 下载预编译版本
-
-Release 页面提供四个免安装压缩包：
-
-| 平台 | 架构 | 文件 |
-| --- | --- | --- |
-| macOS | Apple Silicon | `snake-puzzle-<version>-macos-arm64.tar.gz` |
-| macOS | Intel | `snake-puzzle-<version>-macos-x86_64.tar.gz` |
-| Linux | x86_64 | `snake-puzzle-<version>-linux-x86_64.tar.gz` |
-| Windows | x86_64 | `snake-puzzle-<version>-windows-x86_64.zip` |
-
-每个包包含可执行文件、`assets/atoms`、`README.md`、`LICENSE`、文档和启动脚本。
-解压后运行 `snake_puzzle`（Windows 为 `snake_puzzle.exe`），无需安装 raylib。
-
-- macOS 构建面向 macOS 11+，是未签名版本；首次启动可能需要在 Finder 中右键 → 打开。
-- Linux 构建在 Ubuntu 22.04 上验证（glibc 2.35+），需要常见的 X11/OpenGL/ALSA 桌面库。
-- Windows 构建使用 MinGW-w64 UCRT64 并静态链接 GCC 运行库，面向 Windows 10/11 x64。
-- 每个 Release 附带 `SHA256SUMS`。
-
-发布流程说明见 [`docs/RELEASE.md`](docs/RELEASE.md)。
-
-## 快速开始（源码构建）
-
-### 依赖
-
-- C11 编译器（macOS 上使用 Clang 测试）
-- [raylib](https://www.raylib.com/) 6.0（CMake 会自动下载 raylib 6.0）
-- CMake 3.20+，或使用 Makefile + 已安装的 raylib
-- `pkg-config`（仅 Makefile 方式需要）
-- Python 3.10+（仅离线工具与打包）
-
-### 构建与运行
-
-推荐使用 CMake；它会自动拉取并静态编译 raylib 6.0：
-
-```bash
-cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
-cmake --build build-cmake --parallel
-./build-cmake/snake_puzzle --seed 1234
-```
-
-Linux 构建 raylib 前需要桌面开发库：
-
-```bash
-sudo apt install libasound2-dev libx11-dev libxrandr-dev libxi-dev \
-  libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev libxinerama-dev \
-  libwayland-dev libxkbcommon-dev
-```
-
-如果本机已经安装 raylib 6.0，也可以使用 Makefile：
-
-```bash
-make
-./build/snake_puzzle --seed 1234
-```
-
-macOS 安装系统 raylib：
-
-```bash
-brew install raylib pkg-config
-```
-
-不指定 `--seed` 时使用时间种子。种子会显示在右上角，便于复现同一张地图。
-
-```bash
-# 固定种子 + 调整每步动画速度
-./build/snake_puzzle --seed 1234 --step-ms 180
-
-# 校验单张地图并导出可视化 dump
-./build/snake_puzzle --validate-seed 1234 --dump build/map.txt
-python3 tools/visualize_map.py build/map.txt
-
-# 批处理统计
-python3 tools/batch_sim.py --count 200 --seed 1000
-
-# 打单个平台发布包
-python3 tools/package_release.py \
-  --binary build-cmake/snake_puzzle \
-  --platform linux-x86_64 \
-  --version 1.1.0 \
-  --output-dir dist
-```
-
----
-
-## 玩法
-
-### 输入指令
-
-格式为 `方向 步数`，方向是 `w/a/s/d`，步数只能是 `1-9`。多条指令用分号分隔：
-
-```text
-d 3; w 1; a 2; s 1
-```
-
-- 在底部输入框键入，按 `Enter` 或点击 `RUN` 执行。
-- 整条序列立即按顺序执行，执行过程中不能输入、撤销或中断。
-- 反向移动、撞墙、撞到蛇身都会死亡。
-- 在特殊门前进入小关卡时，主路线序列会暂停；通关后回到原位置并继续剩余步骤。
-
-> 提示：输入框只接受 `wasd`、`1-9`、空格和分号。按 `Backspace` 删除。
-
-### 目标
-
-1. 穿过由两个预制原子拼接成的机关链。
-2. 取得全部 `S` 封印。
-3. 进入 `D` 特殊门。
-4. 在小关卡中收集全部 `O` 球，再走到出口 `E`。
-5. 带着奖励分回到主地图，继续累计分数，直到死亡。
-
-### 图例
-
-| 符号 | 含义 |
-| --- | --- |
-| `@` / `o` | 蛇头 / 蛇身 |
-| `#` | 墙壁 |
-| `*` / `$` | 普通食物 / 金色食物 |
-| `S` | 封印（核心原子出口） |
-| `D` | 特殊门 |
-| `L` / `+` | 上锁门 / 已打开 |
-| `_` / `=` | 压力开关 / 已压下 |
-| `B` | 可推动石块 |
-| `<` `>` `^` `v` | 单向门（只允许沿箭头方向进入） |
-| `~` / `x` | 断裂地板 / 已塌陷深坑 |
-| `T` | 传送点（成对） |
-| `K` / `A` / `P` / `2` | 钥匙 / 护盾 / 穿墙 / 双倍分数 |
-| `O` | 小关卡球 |
-| `E` / `e` | 已开启 / 未开启的小关卡出口 |
-
-### 功能地形与道具
-
-| 机制 | 规则 |
-| --- | --- |
-| 上锁门 | 拥有钥匙时踏入即消耗一把钥匙并永久打开；没有钥匙视为致命碰撞 |
-| 单向门 | 仅允许沿箭头方向进入，反向或侧向进入视为墙 |
-| 压力开关 | 蛇头或石块压上后永久触发，打开该原子内全部上锁门 |
-| 可推石块 | 沿推动方向滑行，直到撞墙、机关、实体或压力开关；停在开关上会触发机关 |
-| 传送点 | 成对出现，踏上后立即传送到另一侧；落点被占用会死亡 |
-| 断裂地板 | 蛇头经过后标记，尾部离开时永久塌陷成深坑 |
-| 护盾 | 吸收一次致命碰撞，本次移动取消，序列继续 |
-| 穿墙 | 下一次进入墙时溶解该墙并消耗 |
-| 双倍 | 下一颗食物分数翻倍 |
-| 特殊小关卡 | 核心封印集齐后开启；进入后收集全部球并到达出口，获得奖励并返回 |
-
-### 计分
-
-| 事件 | 分数 |
-| --- | ---: |
-| 普通食物 | +10 |
-| 金色食物 | +30 |
-| 道具 | +5 |
-| 第 n 个封印 | +25 + 15 × 已持有封印数 |
-| 小关卡球 | +15（本地展示） |
-| 小关卡通关奖励 | +100 + 15 × 球数 |
-
-最高分是**进程内会话最高分**，不会写入磁盘。死亡后按 `Enter` 或点击 `NEW MAP` 会立即用新种子生成下一局。
-
----
-
-## 程序化生成
-
-每局地图不是随机撒点，而是：
-
-1. 从 `assets/atoms/` 加载预制谜题原子。
-2. 用加权随机选择两个兼容原子（入口行、尺寸、总宽约束）。
-3. 建立线性依赖图，保证无环。
-4. 在 20×15 网格上刻出安全起点、原子链、特殊门和随机奖励回环。
-5. 在原子出口放置封印；特殊门要求全部封印。
-6. 将原子的参考解自动拼接成整张地图的参考指令序列。
-7. 用真实 `game_step` 在副本上逐步模拟参考解；死亡、未进入特殊门或封印数不足即重试。
-8. 保留奖励回环、食物、道具、种子和完整统计，输出可复现地图。
-
-生成器是确定性的：相同 seed + 相同原子库 + 相同尺寸会得到相同地图。失败会自动重试，最多 48 次。
-
-### 原子配置
-
-原子是外部文本文件，新增原子不需要改 C 代码：
-
-```text
-name key_door
-difficulty 1
-weight 4
-layout
-#####
-#.K.#
-E.L.X
-#.#.#
-#####
-end
-solution
-d 1; w 1; d 1; s 1; d 2
-end
-```
-
-- `E` 必须位于西边缘，`X` 位于同一行的东边缘。
-- 布局最大 10×10；生成器按入口行水平拼接。
-- `solution` 是供验证器与生成器使用的参考解。
-- 详细标记表见 [`assets/atoms/README.md`](assets/atoms/README.md)。
-- 离线校验：`python3 tools/validate_atoms.py`。
-- 导出 C 可加载的紧凑 SPA1：`python3 tools/export_atoms.py --output build/atoms.spa`。
-  然后可用 `./build/snake_puzzle --atoms build/atoms.spa --batch 20` 加载。
-
-当前原子库：
-
-| 原子 | 机制 |
-| --- | --- |
-| `key_door` | 钥匙→上锁门 |
-| `push_block` | 推石入封闭压力槽 |
-| `single_gate` | 单向门绕行 |
-| `teleport_fold` | 成对传送点误导 |
-| `break_floor` | 一次性断裂地板 |
-
----
-
-## 工具链
-
-所有 Python 工具均为离线分析，不参与游戏运行：
-
-```bash
-# 1. 独立校验每个原子，并输出参考解
-python3 tools/validate_atoms.py
-
-# 2. 终端可视化生成器导出的地图
-./build/snake_puzzle --validate-seed 42 --dump build/map42.txt
-python3 tools/visualize_map.py build/map42.txt
-
-# 3. 调用 C 生成器批量统计可解率、依赖链、机关密度
-python3 tools/batch_sim.py --count 500 --seed 1000
-python3 tools/batch_sim.py --count 500 --seed 1000 --json
-
-# 4. 导出紧凑 SPA1 原子库
-python3 tools/export_atoms.py --output build/atoms.spa
-
-# 5. 生成平台发布包
-python3 tools/package_release.py \
-  --binary build/snake_puzzle \
-  --platform macos-arm64 \
-  --version 1.1.0 \
-  --output-dir dist
-```
-
-`make tools-test` 会串联原子校验、SPA 导出和 C 端加载批处理。
-发布流程见 [`docs/RELEASE.md`](docs/RELEASE.md)。
-
-### 无窗口命令
-
-```bash
-./build/snake_puzzle --batch 100 --seed 1000
-./build/snake_puzzle --validate-seed 42 --dump build/map42.txt
-./build/snake_puzzle --list-atoms
-./build/snake_puzzle --help
-```
-
-批处理输出 JSON Lines，字段包括 `valid`、`attempts`、`atoms`、`branches`、`density`、`witness_steps`、`chain_length` 等。这些模式不会初始化 raylib 窗口。
-
----
-
-## 项目结构
-
-```text
-snake_puzzle/
-├── CMakeLists.txt     # 跨平台发布构建（自动拉取 raylib 6.0）
-├── Makefile           # 本地开发构建（系统 raylib）
-├── include/snake_puzzle/
-│   ├── app.h
-│   ├── platform.h     # 可执行文件/资源路径解析
-│   ├── core/          # board, snake, command, event, game, rng, score
-│   ├── entity/        # terrain, item, food, door
-│   ├── gen/           # atom, dependency, generator, validator, solver
-│   └── ui/            # render_cli, render_raylib
-├── src/
-│   ├── main.c
-│   ├── app.c
-│   ├── platform.c
-│   ├── core/
-│   ├── gen/
-│   ├── entity/
-│   └── ui/
-├── assets/atoms/      # 外部谜题原子
-├── licenses/          # raylib / GLFW 第三方许可
-├── tools/             # Python 离线工具 + 发布打包
-├── tests/             # C 单元与集成测试
-├── .github/workflows/ # CI + 多平台 Release
-└── docs/              # 架构、发布流程、截图
-```
-
-- `core/` 不包含任何 raylib 头文件；CLI/dump/测试与图形 UI 共享同一套规则。
-- 地形行为表在 `entity/terrain.c`，道具定义表在 `entity/item.c`。
-- 移动、推石、开关、传送、死亡等全部变成事件，由 UI/测试消费。
-- `app.c` 负责运行流程，不依赖 raylib；`ui/render_raylib.c` 只消费 `App` 状态。
-- 更多设计说明见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
-
----
-
-## 测试
-
-```bash
-make test       # C 单元 / 集成测试
-make check      # 测试 + Python 工具链 + SPA 导出 + C 加载
-```
-
-`make test` 覆盖：
-
-- 指令解析：合法序列、空格、大小写、尾分号、越界步数、空输入、过多久序列。
-- 蛇与棋盘：初始化、增长、尾格移动、自身占位、边界。
-- 规则：食物增长、双倍、撞墙、反向、护盾、钥匙门、单向门、推石压板、断裂地板、传送、穿墙、自咬、特殊门进入/返回值。
-- 生成：多种子合法性、原子/封印/奖励分支、确定性复现、小关卡生成。
-- 求解/验证：参考解逐步模拟、故意失败参考解、可达性 BFS。
-- 应用层：命令提交、真实参考解跑通、特殊关卡暂停/结算、死亡后新局。
-
-当前为 **643 checks, 0 failures**。
-
-GitHub Actions 会运行核心测试、原子校验和 SPA 导出；打 `v*` 标签时会触发
-Linux / macOS (arm64 + x86_64) / Windows 多平台二进制构建并发布 Release。
-
----
-
-## 设计边界
-
-- **没有**局外成长、模式选择、持久化解锁、Undo、剧情结局。
-- 最高分只存在于当前进程；退出即清空。游戏不写存档。
-- 原子目前固定为“西进东出”的水平模板；生成器随机选择原子、奖励回环和分支位置，而不是任意旋转摆放。
-- 主链原子内的参考解会经过完整引擎模拟；但“任意长度蛇身 + 任意错误推石后仍可解”是玩家决策造成的局面，生成器只保证初始局面与参考路线可解。
-- 小关卡生成使用连通性验证和“球不得位于死胡同”的局部约束；它不是完整的状态空间最优解证明。
-- 图形界面需要桌面/OpenGL；所有批量验证和测试都能无窗口运行。
+| 终端 ANSI 渲染 | raylib 桌面窗口 |
+| 回合制 + 实时模式切换 | 只有指令序列回合执行 |
+| 食物数量阈值开门 | 用封印数量开门，进入小关卡 |
+| 时间 + 长度双计分 | 食物/封印/小关卡计分 |
+| 运行时 BFS 自动走一步 | BFS 只用于生成器/可达性验证 |
+| `player_move` 策略重编译 | 未实现 |
+| 固定数组、最小抽象 | 已有分层模块和较完整测试 |
+
+因此：
+
+- 本文是**目标设计**，不是对 v1.1.0 二进制功能的声明。
+- 早期原型的架构、构建和发布记录仍可查看：
+  [ARCHITECTURE.md](docs/ARCHITECTURE.md)、[RELEASE.md](docs/RELEASE.md)、
+  [Releases](https://github.com/Arkee-Z/snake-puzzle/releases/latest)。
+- 下一步应先按 v0.1 建立独立的终端骨架（固定数组 + ANSI），
+  再逐步迁移命令解析、碰撞、门/实时模式和 BFS；是否保留 raylib 原型待定。
 
 ## License
 
 MIT © 2026 Arkee-Z
-
-发布二进制包含静态链接的 raylib / GLFW；第三方许可见
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 `licenses/`。

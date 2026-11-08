@@ -1,3 +1,6 @@
+> **Historical prototype release documentation.** These binaries predate the terminal SP direction.
+> See the root README for the current design target.
+
 # Release Engineering
 
 ## What ships

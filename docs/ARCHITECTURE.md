@@ -1,3 +1,6 @@
+> **Historical prototype document.** This describes the early raylib implementation.
+> The current product direction is the terminal-based SP design in the root README.
+
 # Architecture
 
 ## 1. Runtime layers
