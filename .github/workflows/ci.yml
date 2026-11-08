@@ -6,8 +6,17 @@ on:
   pull_request:
 
 jobs:
-  core-and-tools:
-    runs-on: ubuntu-latest
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: macos
+            os: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,19 +26,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Build and run C tests (no graphics layer)
+      - name: Build
+        run: make
+
+      - name: Run C tests
         run: make test
 
-      - name: Validate puzzle atoms
-        run: python3 tools/validate_atoms.py
-
-      - name: Export compact atom registry
-        run: python3 tools/export_atoms.py --output build/atoms.spa
-
-      - name: Check Python tool syntax
-        run: python3 -m py_compile tools/*.py
-
-      - name: Show atom registry
+      - name: Smoke test
         run: |
-          ls -lh build/atoms.spa
-          head -5 build/atoms.spa
+          ./build/sp --version
+          printf 'p\nq\n' | ./build/sp --no-color maps/tutorial.map > /dev/null
+
+      - name: Check packaging tool syntax
+        run: python3 -m py_compile tools/package_release.py

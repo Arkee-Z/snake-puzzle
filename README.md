@@ -1,10 +1,9 @@
 # Snake Puzzle (SP) 设计需求
 
-> **文档状态：设计草案。**
-> 本文是下一阶段终端版 SP 的目标设计，不代表当前二进制已经实现全部条目。
-> 仓库当前仍保留早期 raylib 原型，差异与迁移状态见文末
-> [「当前仓库状态」](#当前仓库状态)。
-> 开发决策记录见 [`devlog.md`](devlog.md)。
+> **文档状态：终端版已重建。**
+> 当前 `main` 已按 v0.1–v0.5 落地为纯终端 C 版；早期 raylib 原型只保留在 Git
+> 历史和 v1.1.0 的旧 Release 中。
+> 快速开始见 [「运行」](#运行)，开发决策见 [`devlog.md`](devlog.md)。
 
 ## 1. 项目定位
 
@@ -95,28 +94,116 @@
 
 > Snake Puzzle 是一个用 C 和终端实现的、以回合制贪吃蛇为外壳、以迷宫路径规划和双模式切换为核心机制、以自用探索和游戏化学习为目的的可扩展谜题游戏。
 
-## 当前仓库状态
+## 10. 当前实现（终端重建）
 
-当前 `main` 上仍保留早期 **raylib 原型**，它与本文的终端目标存在明确差异：
+| 里程碑 | 状态 | 落地内容 |
+| --- | --- | --- |
+| v0.1 | 完成 | 固定地图、ANSI 绘制、食物、增长、长度/时间计分 |
+| v0.2 | 完成 | `w 3` / 多命令解析、逐格碰撞、随机障碍地图、文本地图加载 |
+| v0.3 | 完成 | 食物数量范围开门、回合制/实时模式切换、不同配色与 HUD |
+| v0.4 | 完成 | BFS 自动寻路、`p` 单步、`auto` 连续求解、生成时验证可解 |
+| v0.5 | 完成 | `player_move()` 策略入口，改源码重编译即可替换策略 |
 
-| 目标条目 | 当前原型 |
-| --- | --- |
-| 终端 ANSI 渲染 | raylib 桌面窗口 |
-| 回合制 + 实时模式切换 | 只有指令序列回合执行 |
-| 食物数量阈值开门 | 用封印数量开门，进入小关卡 |
-| 时间 + 长度双计分 | 食物/封印/小关卡计分 |
-| 运行时 BFS 自动走一步 | BFS 只用于生成器/可达性验证 |
-| `player_move` 策略重编译 | 未实现 |
-| 固定数组、最小抽象 | 已有分层模块和较完整测试 |
+### 运行
 
-因此：
+```bash
+make
+./build/sp                         # 随机地图
+./build/sp maps/tutorial.map       # 固定教程地图
+./build/sp --seed 42               # 可复现随机地图
+./build/sp --no-color --debug      # 无颜色 + 调试 HUD
+make test
+```
 
-- 本文是**目标设计**，不是对 v1.1.0 二进制功能的声明。
-- 早期原型的架构、构建和发布记录仍可查看：
-  [ARCHITECTURE.md](docs/ARCHITECTURE.md)、[RELEASE.md](docs/RELEASE.md)、
-  [Releases](https://github.com/Arkee-Z/snake-puzzle/releases/latest)。
-- 下一步应先按 v0.1 建立独立的终端骨架（固定数组 + ANSI），
-  再逐步迁移命令解析、碰撞、门/实时模式和 BFS；是否保留 raylib 原型待定。
+- 纯 C11，无 ncurses、无 raylib、无第三方运行时依赖。
+- macOS/Linux 使用 POSIX 终端；Windows 10/11 需支持 ANSI 的控制台。
+- Windows 构建输出 `build/sp.exe`。
+- 不写存档、不做局外成长、没有 Undo。
+
+### 操作
+
+回合制：
+
+```text
+w / a / s / d [步数]    Enter 提交，步数 1-99，可省略
+w 3; d 2; s 1           分号分隔的多命令
+p                       按 player_move 策略走一步
+auto                    连续 BFS 求解直到目标/死亡
+v                       调试 HUD
+r                       重开
+?                       帮助
+q                       退出
+```
+
+实时模式：
+
+```text
+WASD    立即转向，无需 Enter
+q       退出
+```
+
+实时模式下蛇自身按固定 tick 自动前进；撞墙或撞到蛇身结束本局，抵达 `E` 完成。
+
+### 地图格式
+
+```text
+#  wall       .  floor      *  food
+D  door       @  start      E  real-time exit
+```
+
+- `@` 只能出现一次，初始蛇身由程序在起点后方自动摆放。
+- 回合地图需要恰好一个 `D`；食物数量决定门限范围：
+  `min = total/2`，`max = total-1`（食物较少时自动收敛）。
+- 超过 `max` 后门永久封印，需要重开。
+- 实时地图可直接包含 `E`；随机模式会生成独立实时 chamber。
+- 随机地图生成后用内置 BFS 实测一遍完整回合路径与实时出关路径，
+  不通就重试，因此默认策略保证能解。
+
+### 计分
+
+```text
+score = food × 10 + max_length × 20 + phase_bonus + time_bonus
+time_bonus = max(0, 300 - elapsed_seconds) × 2
+phase_bonus: door +100, real-time exit +250
+```
+
+时间从本局开始计时；回合思考、自动寻路和实时移动都会消耗时间分。
+过长或过慢不会直接失败，但会降低最终分数。
+
+### 玩家策略
+
+策略入口在 [`src/game.c`](src/game.c) 的 `player_move()`：
+
+```c
+SpDir player_move(const SpGame *game)
+{
+    return bfs_next_direction(game);
+}
+```
+
+修改这个函数并重新 `make`，即可提交自己的自动策略；`p` 和 `auto` 都调用它。
+
+### 实现结构
+
+```text
+include/sp.h       固定数组、Game 状态、公开 API
+include/term.h     termios / Windows console 适配
+src/game.c         地图解析、随机生成、碰撞、门、BFS、计分、player_move
+src/term.c         原始输入、计时、光标、ANSI
+src/main.c         ANSI 渲染、回合/实时循环、CLI、结算
+maps/tutorial.map  手工教程地图
+tests/test_main.c  152 checks
+devlog.md          决策记录
+```
+
+### 已知边界
+
+- 回合制撞墙/撞蛇身是“阻止移动并消耗时间”，不是死亡；实时模式才是死亡。
+- 实时 chamber 固定 20×15，进入时携带当前蛇长，超过 12 会截断到 12。
+- 随机地图保证默认 `player_move` 的回合与实时路径可解，不保证任意人为操作后仍可逆。
+- `auto` 连续寻路期间无普通按键暂停，使用 Ctrl+C 退出。
+- 旧 raylib 原型 v1.1.0 仍在 [Releases](https://github.com/Arkee-Z/snake-puzzle/releases/tag/v1.1.0)，
+  不再参与 `main` 的构建。
 
 ## License
 

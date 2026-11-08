@@ -1,87 +1,486 @@
+#include "sp.h"
+#include "term.h"
+
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#ifdef _WIN32
-#include <process.h>
-#define SP_GETPID _getpid
-#else
-#include <unistd.h>
-#define SP_GETPID getpid
-#endif
+#define C_RESET "\x1b[0m"
 
-#include "snake_puzzle/app.h"
-#include "snake_puzzle/gen/generator.h"
-#include "snake_puzzle/gen/validator.h"
-#include "snake_puzzle/platform.h"
-#include "snake_puzzle/ui/render_cli.h"
-#include "snake_puzzle/ui/render_raylib.h"
+typedef enum {
+    RUN_FINISHED = 0,
+    RUN_RESTART,
+    RUN_QUIT,
+    RUN_CONTINUE
+} RunResult;
 
-#ifndef SP_DEFAULT_ATOMS_DIR
-#define SP_DEFAULT_ATOMS_DIR "assets/atoms"
-#endif
+static bool color_enabled = true;
+static bool initial_debug = false;
+static int best_score = 0;
 
-#ifndef SP_VERSION
-#define SP_VERSION "1.1.0"
-#endif
-
-typedef struct CliOptions {
-    uint64_t seed;
-    char atoms_path[SP_ATOM_PATH];
-    bool atoms_explicit;
-    int batch_count;
-    int validate;
-    int dump;
-    const char *dump_path;
-    const char *screenshot_path;
-    double auto_exit;
-    int step_ms;
-    int width;
-    int height;
-    int show_help;
-    int demo_special;
-    int demo_death;
-    int list_atoms;
-} CliOptions;
-
-static void print_usage(FILE *out)
+static const char *clr(const char *code)
 {
-    fprintf(out,
-            "Snake Puzzle — command-driven roguelike grid logic\n"
-            "\n"
-            "Usage: snake_puzzle [options]\n"
-            "\n"
-            "  --seed N            deterministic base seed (default: time-based)\n"
-            "  --atoms PATH        atom directory or exported .spa file\n"
-            "  --width W           main board width (default 20, max %d)\n"
-            "  --height H          main board height (default 15, max %d)\n"
-            "  --step-ms N         milliseconds between executed steps (default 105)\n"
-            "  --auto-exit SEC     close the graphical window after SEC seconds\n"
-            "  --screenshot PATH   save one rendered frame and exit\n"
-            "  --show-help         open the field manual on launch\n"
-            "  --demo-special      open a generated special chamber (visual QA)\n"
-            "  --demo-death        show the run-over screen (visual QA)\n"
-            "\n"
-            "Headless tooling:\n"
-            "  --batch N           generate N levels and print JSON Lines\n"
-            "  --validate-seed N   generate and validate one level\n"
-            "  --dump PATH         write a validated map dump ('-' for stdout)\n"
-            "  --list-atoms        print the loaded atom registry\n"
-            "\n"
-            "  -h, --help          show this help\n"
-            "  -v, --version       show version\n"
-            "\n"
-            "Examples:\n"
-            "  snake_puzzle --seed 42\n"
-            "  snake_puzzle --seed 42 --screenshot build/frame.png\n"
-            "  snake_puzzle --batch 200 --seed 1000\n"
-            "  snake_puzzle --validate-seed 42 --dump build/map.txt\n",
-            SP_MAX_WIDTH, SP_MAX_HEIGHT);
+    return color_enabled ? code : "";
 }
 
-static bool parse_u64(const char *text, uint64_t *out)
+static void format_time(char *out, size_t out_size, int seconds)
+{
+    if (seconds < 0) {
+        seconds = 0;
+    }
+    snprintf(out, out_size, "%02d:%02d", seconds / 60, seconds % 60);
+}
+
+static int snake_index_at(const SpGame *game, int x, int y)
+{
+    int i;
+    for (i = 0; i < game->length; ++i) {
+        if (game->snake[i].x == x && game->snake[i].y == y) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static const char *cell_color(const SpGame *game, int x, int y, unsigned char cell)
+{
+    bool realtime = game->mode != SP_MODE_TURN;
+    int index = snake_index_at(game, x, y);
+
+    if (index == 0) {
+        return realtime ? "\x1b[1;96m" : "\x1b[1;92m";
+    }
+    if (index > 0) {
+        return realtime ? "\x1b[36m" : "\x1b[32m";
+    }
+    switch (cell) {
+    case SP_CELL_WALL:
+        return realtime ? "\x1b[1;31m" : "\x1b[90m";
+    case SP_CELL_FOOD:
+        return "\x1b[1;33m";
+    case SP_CELL_DOOR:
+        return game_door_open(game) ? "\x1b[1;92m" : "\x1b[1;35m";
+    case SP_CELL_EXIT:
+        return "\x1b[1;92m";
+    case SP_CELL_EMPTY:
+    default:
+        return "\x1b[38;5;238m";
+    }
+}
+
+static char cell_glyph(const SpGame *game, int x, int y, unsigned char cell)
+{
+    int index = snake_index_at(game, x, y);
+    if (index == 0) {
+        return '@';
+    }
+    if (index > 0) {
+        return 'o';
+    }
+    switch (cell) {
+    case SP_CELL_WALL:
+        return '#';
+    case SP_CELL_FOOD:
+        return '*';
+    case SP_CELL_DOOR:
+        return 'D';
+    case SP_CELL_EXIT:
+        return 'E';
+    case SP_CELL_EMPTY:
+    default:
+        return '.';
+    }
+}
+
+static void render_game(const SpGame *game, uint64_t now_ms)
+{
+    char time_text[16];
+    char food_text[64];
+    bool realtime_visual = game->mode != SP_MODE_TURN;
+    int x;
+    int y;
+
+    format_time(time_text, sizeof(time_text), game_elapsed_seconds(game, now_ms));
+    if (!realtime_visual) {
+        const char *door = game_door_open(game)
+                               ? "OPEN"
+                               : (game->turn_food_eaten > game->turn_food_max ? "SEALED" : "LOCKED");
+        snprintf(food_text, sizeof(food_text), "FOOD %d [%d-%d]  DOOR %s",
+                 game->turn_food_eaten, game->turn_food_min, game->turn_food_max, door);
+    } else {
+        snprintf(food_text, sizeof(food_text), "FOOD %d  MAX LEN %d  EXIT E", game->total_food_eaten,
+                 game->max_length);
+    }
+
+    fputs("\x1b[H", stdout);
+    if (realtime_visual) {
+        printf("%s  !!! REALTIME !!!  %s   score %d   time %s   len %d   seed %llu\x1b[K\n",
+               clr("\x1b[1;41;97m"), clr(C_RESET), game_score(game, now_ms), time_text,
+               game->length, (unsigned long long)game->seed);
+        printf("%s  WASD steers immediately; the snake moves by itself.  %s\x1b[K\n",
+               clr("\x1b[1;31m"), clr(C_RESET));
+    } else {
+        printf("%s  SNAKE PUZZLE // TURN MODE  %s   score %d   time %s   length %d   seed %llu\x1b[K\n",
+               clr("\x1b[1;36m"), clr(C_RESET), game_score(game, now_ms), time_text,
+               game->length, (unsigned long long)game->seed);
+        printf("  commands: w/a/s/d [1-99]  ·  p = one BFS step  ·  auto = full BFS  ·  ? help\x1b[K\n");
+    }
+    printf("  %s\x1b[K\n", food_text);
+    printf("  +");
+    for (x = 0; x < game->width; ++x) {
+        putchar('-');
+    }
+    printf("+\x1b[K\n");
+    for (y = 0; y < game->height; ++y) {
+        printf("  |");
+        for (x = 0; x < game->width; ++x) {
+            unsigned char cell = game->cells[y][x];
+            char glyph = cell_glyph(game, x, y, cell);
+            if (color_enabled) {
+                printf("%s%c%s", cell_color(game, x, y, cell), glyph, C_RESET);
+            } else {
+                putchar(glyph);
+            }
+        }
+        printf("|\x1b[K\n");
+    }
+    printf("  +");
+    for (x = 0; x < game->width; ++x) {
+        putchar('-');
+    }
+    printf("+\x1b[K\n");
+    if (game->message[0] != '\0') {
+        printf("  %s\x1b[K\n", game->message);
+    } else {
+        printf("\x1b[K\n");
+    }
+    if (game->debug) {
+        printf("  DEBUG pos=(%d,%d) dir=%s key=0x%02x moves=%d ticks=%d elapsed=%llums\x1b[K\n",
+               game->snake[0].x, game->snake[0].y, sp_dir_name(game->dir), game->last_key,
+               game->moves, game->realtime_ticks,
+               (unsigned long long)(now_ms >= game->start_ms ? now_ms - game->start_ms : 0));
+    } else {
+        printf("  v: debug HUD   r: restart   q: quit\x1b[K\n");
+    }
+    fputs("\x1b[J", stdout);
+    fflush(stdout);
+}
+
+static void show_help(void)
+{
+    term_clear();
+    printf("\n  SNAKE PUZZLE / FIELD NOTES\n");
+    printf("  ==========================\n\n");
+    printf("  TURN MODE\n");
+    printf("    w/a/s/d [steps]     move; steps optional (1-99), e.g. w 3\n");
+    printf("    w 2; d 4            semicolon-separated sequence\n");
+    printf("    p                    one BFS autopilot step\n");
+    printf("    auto                 continuous BFS autopilot\n");
+    printf("    v                    toggle debug HUD\n");
+    printf("    r                    restart\n");
+    printf("    q                    quit\n\n");
+    printf("  Map:\n");
+    printf("    # wall    . floor    * food    D door    @ head    o body    E exit\n\n");
+    printf("  Turn mode collisions block you and cost time. The door only opens when\n");
+    printf("  the food count is inside the shown range. Overeating seals it.\n\n");
+    printf("  REAL-TIME MODE\n");
+    printf("    WASD steers immediately. The snake moves automatically. Wall or body\n");
+    printf("    contact ends the run. Reach E to finish.\n\n");
+    printf("  Score = food*10 + max_length*20 + phase bonus + time bonus.\n");
+    printf("  Time bonus is 2 points per second remaining under 05:00.\n\n");
+    printf("  Press Enter to return to the game.\n");
+    fflush(stdout);
+    {
+        char line[64];
+        (void)fgets(line, sizeof(line), stdin);
+    }
+    term_clear();
+}
+
+static bool wait_for_new_run(const SpGame *game, uint64_t now_ms)
+{
+    char line[64];
+    char time_text[16];
+    int score;
+    bool new_best;
+
+    if (game->end_ms == 0) {
+        now_ms = term_now_ms();
+    } else {
+        now_ms = game->end_ms;
+    }
+    score = game_score(game, now_ms);
+    new_best = score > best_score;
+    if (new_best) {
+        best_score = score;
+    }
+    format_time(time_text, sizeof(time_text), game_elapsed_seconds(game, now_ms));
+    term_leave_raw();
+    term_show_cursor();
+    term_clear();
+    printf("\n  %s  %s\n",
+           game->mode == SP_MODE_WON ? "RUN COMPLETE" : "RUN ENDED",
+           game->mode == SP_MODE_WON ? "The exit accepted you." : "The run was cut short.");
+    printf("  ==============================================\n");
+    printf("  score      %d\n", score);
+    printf("  time       %s\n", time_text);
+    printf("  max length %d\n", game->max_length);
+    printf("  food       %d\n", game->total_food_eaten);
+    printf("  seed       %llu\n", (unsigned long long)game->seed);
+    printf("  best       %d%s\n", best_score, new_best ? "  <-- NEW BEST" : "");
+    printf("\n  [Enter] new map     [q] quit\n");
+    fflush(stdout);
+    if (fgets(line, sizeof(line), stdin) == NULL) {
+        return false;
+    }
+    line[strcspn(line, "\r\n")] = '\0';
+    if (strcmp(line, "q") == 0 || strcmp(line, "Q") == 0 ||
+        strcmp(line, "quit") == 0) {
+        return false;
+    }
+    term_hide_cursor();
+    term_clear();
+    return true;
+}
+
+static RunResult play_realtime(SpGame *game)
+{
+    uint64_t next_tick;
+    bool quit = false;
+
+    term_enter_raw();
+    term_clear();
+    render_game(game, term_now_ms());
+    next_tick = term_now_ms();
+    while (game->mode == SP_MODE_REALTIME && !quit) {
+        int key;
+        uint64_t now;
+        while ((key = term_read_key()) != -1) {
+            int lower = tolower(key);
+            SpDir dir;
+            game->last_key = (unsigned char)key;
+            if (lower == 'q') {
+                quit = true;
+                break;
+            }
+            if (lower == 'v') {
+                game->debug = !game->debug;
+                continue;
+            }
+            dir = sp_dir_from_char((char)key);
+            if (dir != SP_DIR_NONE && dir != sp_dir_opposite(game->dir)) {
+                game->dir = dir;
+            }
+        }
+        if (quit) {
+            break;
+        }
+        now = term_now_ms();
+        if (now >= next_tick) {
+            SpStep step = game_step(game, game->dir);
+            render_game(game, term_now_ms());
+            next_tick += 150;
+            if (next_tick < now) {
+                next_tick = now + 150;
+            }
+            if (step == SP_STEP_DEAD || step == SP_STEP_EXIT ||
+                game->mode != SP_MODE_REALTIME) {
+                break;
+            }
+        }
+        term_sleep_ms(5);
+    }
+    term_leave_raw();
+    if (!quit) {
+        game->end_ms = term_now_ms();
+        return RUN_FINISHED;
+    }
+    return RUN_QUIT;
+}
+
+static RunResult enter_realtime_and_play(SpGame *game)
+{
+    int i;
+
+    term_clear();
+    printf("\n\n  *** WORLD SHIFT ***\n\n");
+    printf("  The door folds the maze inside out.\n");
+    printf("  The world is no longer turn-based.\n");
+    fflush(stdout);
+    for (i = 0; i < 3; ++i) {
+        term_sleep_ms(180);
+        printf("  .");
+        fflush(stdout);
+    }
+    printf("\n\n  REAL-TIME CONTROL ENGAGED\n");
+    term_sleep_ms(500);
+    if (!game_enter_realtime(game)) {
+        term_clear();
+        return RUN_CONTINUE;
+    }
+    return play_realtime(game);
+}
+
+static RunResult play_turn(SpGame *game)
+{
+    char line[256];
+
+    while (game->mode == SP_MODE_TURN) {
+        render_game(game, term_now_ms());
+        printf("> ");
+        fflush(stdout);
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            return RUN_QUIT;
+        }
+        line[strcspn(line, "\r\n")] = '\0';
+        if (line[0] == '\0') {
+            continue;
+        }
+        game->last_key = (unsigned char)line[0];
+
+        if (strcmp(line, "q") == 0 || strcmp(line, "quit") == 0) {
+            return RUN_QUIT;
+        }
+        if (strcmp(line, "r") == 0 || strcmp(line, "restart") == 0) {
+            return RUN_RESTART;
+        }
+        if (strcmp(line, "v") == 0) {
+            game->debug = !game->debug;
+            continue;
+        }
+        if (strcmp(line, "?") == 0 || strcmp(line, "h") == 0 ||
+            strcmp(line, "help") == 0) {
+            show_help();
+            continue;
+        }
+        if (strcmp(line, "p") == 0 || strcmp(line, "P") == 0) {
+            SpDir dir = player_move(game);
+            if (dir == SP_DIR_NONE) {
+                snprintf(game->message, sizeof(game->message), "BFS: no route to the next target.");
+                continue;
+            }
+            {
+                SpStep step = game_step(game, dir);
+                if (step == SP_STEP_DOOR) {
+                    RunResult result = enter_realtime_and_play(game);
+                    if (result != RUN_CONTINUE) {
+                        return result;
+                    }
+                } else if (step == SP_STEP_DEAD || step == SP_STEP_EXIT ||
+                           game->mode != SP_MODE_TURN) {
+                    game->end_ms = term_now_ms();
+                    return RUN_FINISHED;
+                }
+            }
+            continue;
+        }
+        if (strcmp(line, "auto") == 0) {
+            while (game->mode == SP_MODE_TURN) {
+                SpDir dir = player_move(game);
+                SpStep step;
+                if (dir == SP_DIR_NONE) {
+                    snprintf(game->message, sizeof(game->message),
+                             "BFS: no route to the next target.");
+                    break;
+                }
+                step = game_step(game, dir);
+                render_game(game, term_now_ms());
+                term_sleep_ms(45);
+                if (step == SP_STEP_DOOR) {
+                    RunResult result = enter_realtime_and_play(game);
+                    if (result != RUN_CONTINUE) {
+                        return result;
+                    }
+                    break;
+                }
+                if (step == SP_STEP_DEAD || step == SP_STEP_EXIT ||
+                    game->mode != SP_MODE_TURN) {
+                    game->end_ms = term_now_ms();
+                    return RUN_FINISHED;
+                }
+                if (step == SP_STEP_BLOCKED) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        {
+            SpCommand commands[SP_MAX_COMMANDS];
+            int count = 0;
+            char error[128];
+            int c;
+            bool stop_commands = false;
+
+            if (!game_parse_commands(line, commands, SP_MAX_COMMANDS, &count, error,
+                                     sizeof(error))) {
+                snprintf(game->message, sizeof(game->message), "Parse error: %s", error);
+                continue;
+            }
+            for (c = 0; c < count && !stop_commands; ++c) {
+                int s;
+                for (s = 0; s < commands[c].steps; ++s) {
+                    SpStep step = game_step(game, commands[c].dir);
+                    if (step == SP_STEP_DOOR) {
+                        RunResult result = enter_realtime_and_play(game);
+                        if (result != RUN_CONTINUE) {
+                            return result;
+                        }
+                        stop_commands = true;
+                        break;
+                    }
+                    if (step == SP_STEP_DEAD || step == SP_STEP_EXIT ||
+                        game->mode != SP_MODE_TURN) {
+                        game->end_ms = term_now_ms();
+                        return RUN_FINISHED;
+                    }
+                    if (step == SP_STEP_BLOCKED) {
+                        stop_commands = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (game->end_ms == 0) {
+        game->end_ms = term_now_ms();
+    }
+    return RUN_FINISHED;
+}
+
+static bool start_game(SpGame *game, const char *map_path, uint64_t seed, char *error,
+                       size_t error_size)
+{
+    if (map_path != NULL) {
+        if (!game_load_map(game, map_path, error, error_size)) {
+            return false;
+        }
+    } else if (!game_generate_turn(game, 20, 15, seed)) {
+        snprintf(error, error_size, "could not generate a level");
+        return false;
+    }
+    game->debug = initial_debug;
+    game_start(game, term_now_ms());
+    return true;
+}
+
+static void usage(const char *program)
+{
+    printf("Snake Puzzle %s — terminal turn-based + real-time snake puzzle\n\n", SP_VERSION);
+    printf("Usage: %s [options] [map-file]\n\n", program);
+    printf("  --seed N       deterministic random seed\n");
+    printf("  --no-color     disable ANSI colors\n");
+    printf("  --debug        start with debug HUD\n");
+    printf("  --version      print version\n");
+    printf("  --help         show this help\n\n");
+    printf("Controls: w/a/s/d [steps], w 2; d 3, p = BFS step, auto = BFS run,\n");
+    printf("          v = debug, r = restart, q = quit.\n");
+}
+
+static bool parse_seed(const char *text, uint64_t *out)
 {
     char *end = NULL;
     unsigned long long value;
@@ -95,383 +494,83 @@ static bool parse_u64(const char *text, uint64_t *out)
     return true;
 }
 
-static bool parse_int(const char *text, int *out)
-{
-    char *end = NULL;
-    long value;
-
-    errno = 0;
-    value = strtol(text, &end, 10);
-    if (errno != 0 || end == text || (end != NULL && *end != '\0') || value < 0 ||
-        value > 1000000) {
-        return false;
-    }
-    *out = (int)value;
-    return true;
-}
-
-static bool parse_double(const char *text, double *out)
-{
-    char *end = NULL;
-    double value;
-
-    errno = 0;
-    value = strtod(text, &end);
-    if (errno != 0 || end == text || (end != NULL && *end != '\0') || value < 0.0) {
-        return false;
-    }
-    *out = value;
-    return true;
-}
-
-static const char *find_option_value(int argc, char **argv, int *index)
-{
-    if (*index + 1 >= argc) {
-        return NULL;
-    }
-    *index += 1;
-    return argv[*index];
-}
-
-static bool parse_args(int argc, char **argv, CliOptions *options)
-{
-    int i;
-
-    memset(options, 0, sizeof(*options));
-    snprintf(options->atoms_path, sizeof(options->atoms_path), "%s", SP_DEFAULT_ATOMS_DIR);
-    options->width = SP_DEFAULT_WIDTH;
-    options->height = SP_DEFAULT_HEIGHT;
-    options->step_ms = 105;
-    options->seed = (uint64_t)time(NULL) ^ ((uint64_t)SP_GETPID() << 32);
-
-    for (i = 1; i < argc; ++i) {
-        const char *arg = argv[i];
-
-        if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
-            print_usage(stdout);
-            exit(0);
-        } else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--version") == 0) {
-            printf("snake_puzzle %s\n", SP_VERSION);
-            exit(0);
-        } else if (strcmp(arg, "--seed") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL || !parse_u64(value, &options->seed)) {
-                fprintf(stderr, "error: --seed expects an unsigned integer\n");
-                return false;
-            }
-        } else if (strcmp(arg, "--atoms") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL) {
-                fprintf(stderr, "error: --atoms expects a path\n");
-                return false;
-            }
-            snprintf(options->atoms_path, sizeof(options->atoms_path), "%s", value);
-            options->atoms_explicit = true;
-        } else if (strcmp(arg, "--width") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL || !parse_int(value, &options->width)) {
-                fprintf(stderr, "error: --width expects a positive integer\n");
-                return false;
-            }
-        } else if (strcmp(arg, "--height") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL || !parse_int(value, &options->height)) {
-                fprintf(stderr, "error: --height expects a positive integer\n");
-                return false;
-            }
-        } else if (strcmp(arg, "--step-ms") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL || !parse_int(value, &options->step_ms)) {
-                fprintf(stderr, "error: --step-ms expects a non-negative integer\n");
-                return false;
-            }
-        } else if (strcmp(arg, "--batch") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL || !parse_int(value, &options->batch_count) ||
-                options->batch_count <= 0) {
-                fprintf(stderr, "error: --batch expects a positive count\n");
-                return false;
-            }
-        } else if (strcmp(arg, "--validate-seed") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL || !parse_u64(value, &options->seed)) {
-                fprintf(stderr, "error: --validate-seed expects an unsigned integer\n");
-                return false;
-            }
-            options->validate = 1;
-        } else if (strcmp(arg, "--dump") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL) {
-                fprintf(stderr, "error: --dump expects a path\n");
-                return false;
-            }
-            options->dump = 1;
-            options->dump_path = value;
-            if (!options->validate) {
-                options->validate = 1;
-            }
-        } else if (strcmp(arg, "--screenshot") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL) {
-                fprintf(stderr, "error: --screenshot expects a path\n");
-                return false;
-            }
-            options->screenshot_path = value;
-        } else if (strcmp(arg, "--auto-exit") == 0) {
-            const char *value = find_option_value(argc, argv, &i);
-            if (value == NULL || !parse_double(value, &options->auto_exit)) {
-                fprintf(stderr, "error: --auto-exit expects seconds\n");
-                return false;
-            }
-        } else if (strcmp(arg, "--show-help") == 0) {
-            options->show_help = 1;
-        } else if (strcmp(arg, "--demo-special") == 0) {
-            options->demo_special = 1;
-        } else if (strcmp(arg, "--demo-death") == 0) {
-            options->demo_death = 1;
-        } else if (strcmp(arg, "--list-atoms") == 0) {
-            options->list_atoms = 1;
-        } else {
-            fprintf(stderr, "error: unknown option '%s' (try --help)\n", arg);
-            return false;
-        }
-    }
-    if (options->width < 16 || options->width > SP_MAX_WIDTH || options->height < 11 ||
-        options->height > SP_MAX_HEIGHT) {
-        fprintf(stderr, "error: board must be 16..%d wide and 11..%d tall\n", SP_MAX_WIDTH,
-                SP_MAX_HEIGHT);
-        return false;
-    }
-    if (options->step_ms > 10000) {
-        options->step_ms = 10000;
-    }
-    if (options->screenshot_path != NULL && options->auto_exit <= 0.0) {
-        options->auto_exit = 1.0;
-    }
-    {
-        char resolved[SP_ATOM_PATH];
-        if (!sp_resolve_atoms_path(options->atoms_path, options->atoms_explicit, resolved,
-                                   sizeof(resolved))) {
-            fprintf(stderr, "error: could not resolve atom directory\n");
-            return false;
-        }
-        snprintf(options->atoms_path, sizeof(options->atoms_path), "%s", resolved);
-    }
-    return true;
-}
-
-static void json_escape(FILE *out, const char *text)
-{
-    const unsigned char *p = (const unsigned char *)text;
-
-    fputc('"', out);
-    while (p != NULL && *p != '\0') {
-        switch (*p) {
-        case '\\':
-            fputs("\\\\", out);
-            break;
-        case '"':
-            fputs("\\\"", out);
-            break;
-        case '\n':
-            fputs("\\n", out);
-            break;
-        case '\r':
-            fputs("\\r", out);
-            break;
-        case '\t':
-            fputs("\\t", out);
-            break;
-        default:
-            if (*p < 0x20) {
-                fprintf(out, "\\u%04x", (unsigned int)*p);
-            } else {
-                fputc((int)*p, out);
-            }
-            break;
-        }
-        ++p;
-    }
-    fputc('"', out);
-}
-
-static int run_list_atoms(const CliOptions *options)
-{
-    Generator generator;
-    char error[SP_MESSAGE_MAX];
-    int a;
-
-    if (!generator_init(&generator, options->atoms_path, error, sizeof(error))) {
-        fprintf(stderr, "error: %s\n", error);
-        return 1;
-    }
-    printf("atom registry: %s\n", options->atoms_path);
-    for (a = 0; a < generator.library.count; ++a) {
-        const Atom *atom = &generator.library.atoms[a];
-        printf("%-20s %dx%d difficulty=%d weight=%d solution=%d steps\n", atom->name,
-               atom->width, atom->height, atom->difficulty, atom->weight,
-               command_sequence_total_steps(&atom->solution));
-    }
-    return 0;
-}
-
-static int run_batch(const CliOptions *options)
-{
-    Generator generator;
-    char error[SP_MESSAGE_MAX];
-    int index;
-
-    if (!generator_init(&generator, options->atoms_path, error, sizeof(error))) {
-        fprintf(stderr, "error: %s\n", error);
-        return 1;
-    }
-    for (index = 0; index < options->batch_count; ++index) {
-        GenOptions gen_options;
-        Game game;
-        GenStats stats;
-        uint64_t seed = options->seed + (uint64_t)index;
-
-        memset(&gen_options, 0, sizeof(gen_options));
-        gen_options.width = options->width;
-        gen_options.height = options->height;
-        gen_options.seed = seed;
-        gen_options.atoms_path = options->atoms_path;
-        if (generator_generate(&generator, &gen_options, &game, &stats, error, sizeof(error))) {
-            printf("{\"index\":%d,\"seed\":%llu,\"valid\":true,\"attempts\":%d,"
-                   "\"atoms\":[\"%s\",\"%s\"],\"seals\":%d,\"branches\":%d,"
-                   "\"branch_cells\":%d,\"density\":%.6f,\"witness_steps\":%d,"
-                   "\"witness_commands\":%d,\"chain_length\":%d,\"width\":%d,"
-                   "\"height\":%d}\n",
-                   index, (unsigned long long)seed, stats.attempts, stats.atoms[0],
-                   stats.atoms[1], stats.seal_count, stats.branch_count, stats.branch_cells,
-                   stats.floor_density, stats.witness_steps, stats.witness_commands,
-                   stats.chain_length, options->width, options->height);
-        } else {
-            printf("{\"index\":%d,\"seed\":%llu,\"valid\":false,\"error\":",
-                   index, (unsigned long long)seed);
-            json_escape(stdout, error);
-            printf(",\"width\":%d,\"height\":%d}\n", options->width, options->height);
-        }
-        fflush(stdout);
-    }
-    return 0;
-}
-
-static int run_validate(const CliOptions *options)
-{
-    Generator generator;
-    GenOptions gen_options;
-    GenStats stats;
-    Game game;
-    ValidationResult validation;
-    char error[SP_MESSAGE_MAX];
-    FILE *dump = NULL;
-
-    if (!generator_init(&generator, options->atoms_path, error, sizeof(error))) {
-        fprintf(stderr, "error: %s\n", error);
-        return 1;
-    }
-    memset(&gen_options, 0, sizeof(gen_options));
-    gen_options.width = options->width;
-    gen_options.height = options->height;
-    gen_options.seed = options->seed;
-    gen_options.atoms_path = options->atoms_path;
-    if (!generator_generate(&generator, &gen_options, &game, &stats, error, sizeof(error))) {
-        fprintf(stderr, "INVALID seed=%llu: %s\n", (unsigned long long)options->seed, error);
-        return 1;
-    }
-    if (!validator_validate_level(&game, &stats.witness, &validation)) {
-        fprintf(stderr, "INVALID seed=%llu: %s\n", (unsigned long long)options->seed,
-                validation.error);
-        return 1;
-    }
-    printf("VALID seed=%llu attempts=%d atoms=%s+%s seals=%d branches=%d "
-           "witness_steps=%d witness_commands=%d density=%.3f\n",
-           (unsigned long long)options->seed, stats.attempts, stats.atoms[0], stats.atoms[1],
-           stats.seal_count, stats.branch_count, stats.witness_steps,
-           stats.witness_commands, stats.floor_density);
-    if (options->dump) {
-        if (strcmp(options->dump_path, "-") == 0) {
-            render_map_dump(&game, &stats, stdout);
-        } else {
-            dump = fopen(options->dump_path, "wb");
-            if (dump == NULL) {
-                fprintf(stderr, "error: cannot write %s\n", options->dump_path);
-                return 1;
-            }
-            render_map_dump(&game, &stats, dump);
-            fclose(dump);
-            printf("map dump written to %s\n", options->dump_path);
-        }
-    }
-    return 0;
-}
-
 int main(int argc, char **argv)
 {
-    CliOptions options;
-    App app;
-    AppOptions app_options;
-    char error[SP_MESSAGE_MAX];
+    const char *map_path = NULL;
+    uint64_t base_seed = (uint64_t)time(NULL);
+    int run_index = 0;
+    int i;
+    char error[256];
 
-    if (!parse_args(argc, argv, &options)) {
-        return 2;
+    for (i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            usage(argv[0]);
+            return 0;
+        }
+        if (strcmp(argv[i], "--version") == 0) {
+            printf("sp %s\n", SP_VERSION);
+            return 0;
+        }
+        if (strcmp(argv[i], "--no-color") == 0) {
+            color_enabled = false;
+            continue;
+        }
+        if (strcmp(argv[i], "--debug") == 0) {
+            initial_debug = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--seed") == 0) {
+            if (i + 1 >= argc || !parse_seed(argv[i + 1], &base_seed)) {
+                fprintf(stderr, "error: --seed expects an unsigned integer\n");
+                return 2;
+            }
+            ++i;
+            continue;
+        }
+        if (argv[i][0] == '-') {
+            fprintf(stderr, "error: unknown option '%s'\n", argv[i]);
+            return 2;
+        }
+        if (map_path != NULL) {
+            fprintf(stderr, "error: only one map file may be supplied\n");
+            return 2;
+        }
+        map_path = argv[i];
     }
-    if (options.list_atoms) {
-        return run_list_atoms(&options);
-    }
-    if (options.batch_count > 0) {
-        return run_batch(&options);
-    }
-    if (options.validate) {
-        return run_validate(&options);
-    }
-    memset(&app_options, 0, sizeof(app_options));
-    app_options.seed = options.seed;
-    app_options.atoms_path = options.atoms_path;
-    app_options.step_interval = (double)options.step_ms / 1000.0;
-    app_options.width = options.width;
-    app_options.height = options.height;
-    if (!app_init(&app, &app_options, error, sizeof(error))) {
-        fprintf(stderr, "error: %s\n", error);
-        return 1;
-    }
-    if (!app_new_run(&app)) {
-        fprintf(stderr, "error: %s\n", app.input_error[0] != '\0' ? app.input_error
-                                                                 : "could not generate level");
-        app_shutdown(&app);
-        return 1;
-    }
-    if (options.demo_special) {
-        if (!generator_generate_special(app.base_seed ^ UINT64_C(0xC0FFEE), 13, 9,
-                                        &app.special_game, error, sizeof(error))) {
+
+    term_init();
+    term_hide_cursor();
+    for (;;) {
+        SpGame game;
+        uint64_t seed = base_seed + (uint64_t)run_index * UINT64_C(0x9E3779B97F4A7C15);
+        RunResult result;
+
+        if (!start_game(&game, map_path, seed, error, sizeof(error))) {
+            term_shutdown();
             fprintf(stderr, "error: %s\n", error);
-            app_shutdown(&app);
             return 1;
         }
-        app.in_special = true;
-        app.active = &app.special_game;
-        app.executing = false;
-        app.paused_execution = false;
-        app_add_log(&app, EVENT_ENTER_SPECIAL, "Previewing a special chamber.");
+        term_clear();
+        result = game.mode == SP_MODE_REALTIME ? play_realtime(&game) : play_turn(&game);
+        if (result == RUN_QUIT) {
+            break;
+        }
+        if (result == RUN_RESTART) {
+            ++run_index;
+            continue;
+        }
+        if (result == RUN_FINISHED) {
+            if (game.end_ms == 0) {
+                game.end_ms = term_now_ms();
+            }
+            if (!wait_for_new_run(&game, game.end_ms)) {
+                break;
+            }
+            ++run_index;
+            continue;
+        }
+        ++run_index;
     }
-    if (options.demo_death) {
-        app.active = &app.main_game;
-        app.main_game.phase = GAME_DEAD;
-        snprintf(app.main_game.death_reason, sizeof(app.main_game.death_reason),
-                 "You hit a wall at the edge of the grid.");
-        app.main_game.score = 245;
-        app.new_best = true;
-        app.best_score = 245;
-    }
-    app.auto_exit_after = options.auto_exit;
-    app.show_help = options.show_help != 0;
-    if (options.screenshot_path != NULL) {
-        snprintf(app.screenshot_path, sizeof(app.screenshot_path), "%s",
-                 options.screenshot_path);
-        app.screenshot_once = true;
-    }
-    (void)raylib_run_app(&app);
-    app_shutdown(&app);
+    term_shutdown();
     return 0;
 }

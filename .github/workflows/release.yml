@@ -1,4 +1,4 @@
-name: Release binaries
+name: Release terminal binaries
 
 on:
   push:
@@ -20,11 +20,9 @@ jobs:
           - name: macos-arm64
             os: macos-15
             platform: macos-arm64
-            arch: arm64
           - name: macos-x86_64
             os: macos-15-intel
             platform: macos-x86_64
-            arch: x86_64
           - name: linux-x86_64
             os: ubuntu-22.04
             platform: linux-x86_64
@@ -41,58 +39,29 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Linux build dependencies
-        if: matrix.name == 'linux-x86_64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev libx11-dev libxrandr-dev libxi-dev \
-            libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev \
-            libxinerama-dev libwayland-dev libwayland-bin libxkbcommon-dev
-
-      - name: Configure (Unix)
+      - name: Configure version (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           VERSION_NUM="${GITHUB_REF_NAME#v}"
           if [ "${GITHUB_REF_TYPE}" != "tag" ]; then VERSION_NUM="dev"; fi
           echo "VERSION_NUM=${VERSION_NUM}" >> "$GITHUB_ENV"
-          EXTRA=""
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            EXTRA="-DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}"
-          fi
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSP_BUILD_TESTS=OFF \
-            -DSP_RELEASE_VERSION="${VERSION_NUM}" \
-            ${EXTRA}
 
-      - name: Build (Unix)
+      - name: Build and test (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          cmake --build build --parallel 2
-          file build/snake_puzzle
-          if [ "$(uname -m)" = "${{ matrix.arch }}" ]; then
-            ./build/snake_puzzle --version
-          else
-            echo "Cross-compiled ${{ matrix.arch }} binary; runtime smoke test skipped."
-          fi
-
-      - name: Smoke test (Linux)
-        if: matrix.name == 'linux-x86_64'
-        shell: bash
-        run: |
-          ./build/snake_puzzle --batch 20 --seed 1000 > /tmp/batch.jsonl
-          test "$(wc -l < /tmp/batch.jsonl)" -eq 20
-          ! grep -q '"valid":false' /tmp/batch.jsonl
+          make
+          make test
+          ./build/sp --version
+          printf 'p\nq\n' | ./build/sp --no-color maps/tutorial.map > /dev/null
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           python3 tools/package_release.py \
-            --binary build/snake_puzzle \
+            --binary build/sp \
             --platform "${{ matrix.platform }}" \
             --version "${VERSION_NUM}" \
             --output-dir release
@@ -105,28 +74,17 @@ jobs:
           update: false
           install: >-
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-pkgconf
+            make
             ca-certificates
 
-      - name: Configure and build (Windows)
+      - name: Build and test (Windows)
         if: matrix.name == 'windows-x86_64'
         shell: msys2 {0}
         run: |
-          VERSION_NUM="${GITHUB_REF_NAME#v}"
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then VERSION_NUM="dev"; fi
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSP_BUILD_TESTS=OFF \
-            -DSP_RELEASE_VERSION="${VERSION_NUM}"
-          cmake --build build --parallel 2
-          ./build/snake_puzzle.exe --version
-          ./build/snake_puzzle.exe --batch 20 --seed 1000 > batch.jsonl
-          test "$(wc -l < batch.jsonl)" -eq 20
-          ! grep -q '"valid":false' batch.jsonl
-          echo "--- executable dependencies ---"
-          ldd build/snake_puzzle.exe || true
+          make
+          make test
+          ./build/sp.exe --version
+          printf 'p\nq\n' | ./build/sp.exe --no-color maps/tutorial.map > /dev/null
 
       - name: Package (Windows)
         if: matrix.name == 'windows-x86_64'
@@ -134,7 +92,7 @@ jobs:
         run: |
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { 'dev' }
           python tools/package_release.py `
-            --binary build/snake_puzzle.exe `
+            --binary build/sp.exe `
             --platform windows-x86_64 `
             --version $version `
             --output-dir release
@@ -175,19 +133,20 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Snake Puzzle ${{ github.ref_name }}
           body: |
-            ## Downloads
+            ## Terminal Snake Puzzle
 
-            Download the archive matching your platform from the Assets section below.
-            Archive names follow `snake-puzzle-<version>-<platform>`.
+            This is the rebuilt, dependency-free terminal version of Snake Puzzle:
+            turn-based BFS-friendly puzzle mode, food-quota door, real-time chamber,
+            clear-screen ANSI rendering and a writable `player_move` BFS strategy.
 
-            Extract the archive and run `snake_puzzle` (or `snake_puzzle.exe` on Windows).
-            The atom registry is bundled in `assets/atoms`; no external runtime is required.
-            Linux builds target glibc 2.35+ and require common X11/OpenGL/ALSA desktop libraries.
-            Windows builds target Windows 10/11 x64. macOS builds target macOS 11+ and are unsigned,
-            so Gatekeeper may require a right-click → Open on first launch.
-            raylib/GLFW licenses are bundled in `licenses/`.
+            Download the archive for your platform from Assets, extract it, and run
+            `sp` (`sp.exe` on Windows). The `maps/tutorial.map` file is included.
 
-            SHA-256 checksums are included in `SHA256SUMS`.
+            - macOS 11+, Intel or Apple Silicon; unsigned (right-click → Open).
+            - Linux x86_64; built on Ubuntu 22.04 (glibc 2.35+).
+            - Windows 10/11 x64; MinGW runtime is statically linked.
+
+            `SHA256SUMS` is generated for every archive.
           files: release/*
           fail_on_unmatched_files: true
           generate_release_notes: true
