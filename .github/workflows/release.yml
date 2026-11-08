@@ -177,10 +177,8 @@ jobs:
           body: |
             ## Downloads
 
-            - macOS Apple Silicon: `snake-puzzle-<version>-macos-arm64.tar.gz`
-            - macOS Intel: `snake-puzzle-<version>-macos-x86_64.tar.gz`
-            - Linux x86_64: `snake-puzzle-<version>-linux-x86_64.tar.gz`
-            - Windows x86_64: `snake-puzzle-<version>-windows-x86_64.zip`
+            Download the archive matching your platform from the Assets section below.
+            Archive names follow `snake-puzzle-<version>-<platform>`.
 
             Extract the archive and run `snake_puzzle` (or `snake_puzzle.exe` on Windows).
             The atom registry is bundled in `assets/atoms`; no external runtime is required.
