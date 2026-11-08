@@ -110,6 +110,9 @@ def main() -> int:
         shutil.copytree(assets, stage / "assets" / "atoms")
         shutil.copy2("README.md", stage / "README.md")
         shutil.copy2("LICENSE", stage / "LICENSE")
+        shutil.copy2("THIRD_PARTY_NOTICES.md", stage / "THIRD_PARTY_NOTICES.md")
+        if Path("licenses").is_dir():
+            shutil.copytree("licenses", stage / "licenses")
         if not args.no_docs:
             shutil.copytree(docs, stage / "docs")
         write_quickstart(stage / "QUICKSTART.txt", version, args.platform, exe_name)

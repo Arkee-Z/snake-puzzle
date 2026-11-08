@@ -184,8 +184,10 @@ jobs:
 
             Extract the archive and run `snake_puzzle` (or `snake_puzzle.exe` on Windows).
             The atom registry is bundled in `assets/atoms`; no external runtime is required.
-            Linux builds are validated on Ubuntu 22.04 and require common X11/OpenGL desktop libraries.
-            macOS builds are unsigned, so Gatekeeper may require a right-click → Open on first launch.
+            Linux builds target glibc 2.35+ and require common X11/OpenGL/ALSA desktop libraries.
+            Windows builds target Windows 10/11 x64. macOS builds target macOS 11+ and are unsigned,
+            so Gatekeeper may require a right-click → Open on first launch.
+            raylib/GLFW licenses are bundled in `licenses/`.
 
             SHA-256 checksums are included in `SHA256SUMS`.
           files: release/*

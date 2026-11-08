@@ -35,9 +35,9 @@ Release 页面提供四个免安装压缩包：
 每个包包含可执行文件、`assets/atoms`、`README.md`、`LICENSE`、文档和启动脚本。
 解压后运行 `snake_puzzle`（Windows 为 `snake_puzzle.exe`），无需安装 raylib。
 
-- macOS 构建是未签名版本，首次启动可能需要在 Finder 中右键 → 打开。
-- Linux 构建在 Ubuntu 22.04 上验证，需要常见的 X11/OpenGL/ALSA 桌面库。
-- Windows 构建使用 MinGW-w64 UCRT64 并静态链接 GCC 运行库。
+- macOS 构建面向 macOS 11+，是未签名版本；首次启动可能需要在 Finder 中右键 → 打开。
+- Linux 构建在 Ubuntu 22.04 上验证（glibc 2.35+），需要常见的 X11/OpenGL/ALSA 桌面库。
+- Windows 构建使用 MinGW-w64 UCRT64 并静态链接 GCC 运行库，面向 Windows 10/11 x64。
 - 每个 Release 附带 `SHA256SUMS`。
 
 发布流程说明见 [`docs/RELEASE.md`](docs/RELEASE.md)。
@@ -300,6 +300,7 @@ snake_puzzle/
 │   ├── entity/
 │   └── ui/
 ├── assets/atoms/      # 外部谜题原子
+├── licenses/          # raylib / GLFW 第三方许可
 ├── tools/             # Python 离线工具 + 发布打包
 ├── tests/             # C 单元与集成测试
 ├── .github/workflows/ # CI + 多平台 Release
@@ -349,3 +350,6 @@ Linux / macOS (arm64 + x86_64) / Windows 多平台二进制构建并发布 Relea
 ## License
 
 MIT © 2026 Arkee-Z
+
+发布二进制包含静态链接的 raylib / GLFW；第三方许可见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 `licenses/`。

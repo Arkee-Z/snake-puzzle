@@ -21,11 +21,14 @@ snake-puzzle-<version>-<platform>/
 ├── docs/
 ├── README.md
 ├── LICENSE
+├── THIRD_PARTY_NOTICES.md
+├── licenses/
 └── QUICKSTART.txt
 ```
 
 The release build compiles raylib 6.0 from source and links it statically.
-No raylib installation is needed on the player's machine.
+No raylib installation is needed on the player's machine. raylib and GLFW
+licenses are bundled in `licenses/` and `THIRD_PARTY_NOTICES.md`.
 
 ## CI matrix
 
@@ -49,7 +52,7 @@ git tag -a v1.1.0 -m "Snake Puzzle v1.1.0"
 git push origin v1.1.0
 ```
 
-The tag starts the release workflow. When all four build jobs pass:
+The tag starts the release workflow. When all four native build jobs pass:
 
 1. packages are downloaded into one release job;
 2. `SHA256SUMS` is generated;
@@ -65,6 +68,12 @@ gh run list --workflow release.yml
 gh run watch
 gh release view v1.1.0
 ```
+
+## Platform support
+
+- macOS: 11+; arm64 and x86_64 separate builds.
+- Linux: x86_64, built on Ubuntu 22.04 (glibc 2.35+), common X11/OpenGL/ALSA libs.
+- Windows: 10/11 x64; UCRT runtime included by the OS; no MinGW runtime DLLs.
 
 ## Reproducing a package locally
 

@@ -123,4 +123,5 @@ endif()
 
 install(TARGETS snake_puzzle RUNTIME DESTINATION bin)
 install(DIRECTORY assets/atoms DESTINATION share/snake-puzzle/assets)
-install(FILES README.md LICENSE DESTINATION share/snake-puzzle)
+install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md DESTINATION share/snake-puzzle)
+install(DIRECTORY licenses DESTINATION share/snake-puzzle)
